@@ -2,6 +2,8 @@
 
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
+import WeeklyReport from "@/components/WeeklyReport";
+import type { WeeklyReportData } from "@/app/api/weekly-report/route";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -183,16 +185,18 @@ export default function WeekDetailPage({
   const [balances, setBalances] = useState<BalanceRow[]>([]);
   const [bids, setBids] = useState<BidActivity | null>(null);
   const [notes, setNotes] = useState<WeeklyNote | null>(null);
+  const [report, setReport] = useState<WeeklyReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     async function load() {
       try {
-        const [balRes, bidRes, noteRes] = await Promise.all([
+        const [balRes, bidRes, noteRes, reportRes] = await Promise.all([
           fetch(`/api/weekly-balances?week_ending=${date}`),
           fetch(`/api/bid-activity?week_ending=${date}`),
           fetch(`/api/weekly-notes?week_ending=${date}`),
+          fetch(`/api/weekly-report?week_ending=${date}`),
         ]);
 
         if (!balRes.ok) throw new Error("Failed to load balances");
@@ -201,6 +205,7 @@ export default function WeekDetailPage({
 
         if (bidRes.ok) setBids(await bidRes.json());
         if (noteRes.ok) setNotes(await noteRes.json());
+        if (reportRes.ok) setReport(await reportRes.json());
       } catch (e) {
         setError(String(e));
       } finally {
@@ -368,6 +373,13 @@ export default function WeekDetailPage({
               )}
             </div>
           </div>
+
+          {/* Weekly Pulse Report */}
+          {report && (
+            <div className="card px-5 py-5">
+              <WeeklyReport data={report} />
+            </div>
+          )}
         </div>
       )}
     </div>

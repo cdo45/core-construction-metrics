@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "next": "^16.2.3",
     "react": "^18",
     "react-dom": "^18",
