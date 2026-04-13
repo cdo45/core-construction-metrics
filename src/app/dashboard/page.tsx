@@ -9,6 +9,8 @@ import MonthlySection from "@/components/dashboard/MonthlySection";
 import ExecutiveSummary from "@/components/dashboard/ExecutiveSummary";
 import RatioTrends from "@/components/dashboard/RatioTrends";
 import DashboardPDF from "@/components/dashboard/DashboardPDF";
+import Projections from "@/components/dashboard/Projections";
+import type { ProjectionsData } from "@/app/api/projections/route";
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────
 
@@ -64,7 +66,10 @@ function RatioSkeletons() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [data, setData] = useState<MetricsResponse | null>(null);
+  const [data,       setData]       = useState<MetricsResponse | null>(null);
+  const [projData,   setProjData]   = useState<ProjectionsData | null>(null);
+  const [projError,  setProjError]  = useState("");
+  const [projLoading, setProjLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -81,8 +86,28 @@ export default function DashboardPage() {
       .finally(() => setLoading(false));
   }
 
+  function fetchProjections() {
+    setProjLoading(true);
+    setProjError("");
+    fetch("/api/projections")
+      .then(async (r) => {
+        if (r.status === 422) {
+          // not enough data — silently swallow
+          const body = await r.json();
+          setProjError(body.error ?? "Not enough data for projections.");
+          return null;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<ProjectionsData>;
+      })
+      .then((d) => { if (d) setProjData(d); })
+      .catch((e) => setProjError(String(e)))
+      .finally(() => setProjLoading(false));
+  }
+
   useEffect(() => {
     fetchData();
+    fetchProjections();
   }, []);
 
   const weeks  = data?.weeks  ?? [];
@@ -180,7 +205,33 @@ export default function DashboardPage() {
           )}
         </Section>
 
-        {/* 5 — Monthly Analysis */}
+        {/* 5 — 4-Week Projections */}
+        <Section title="4-Week Projections">
+          {projLoading ? (
+            <div className="flex flex-col gap-5">
+              <ChartSkeleton height={320} />
+              <ChartSkeleton height={220} />
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <ChartSkeleton height={200} />
+                <ChartSkeleton height={200} />
+                <ChartSkeleton height={200} />
+              </div>
+            </div>
+          ) : projError ? (
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-10 text-center">
+              <p className="text-sm text-gray-400 italic">{projError}</p>
+              {projError.toLowerCase().includes("weeks") && (
+                <p className="text-xs text-gray-400 mt-2">
+                  Need at least 4 weeks of historical data for projections.
+                </p>
+              )}
+            </div>
+          ) : projData ? (
+            <Projections data={projData} />
+          ) : null}
+        </Section>
+
+        {/* 6 — Monthly Analysis */}
         <Section title="Monthly Analysis">
           {loading ? (
             <div className="flex flex-col gap-5">
