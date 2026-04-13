@@ -87,12 +87,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ week_ending: weekEnding, balances: existing });
     }
 
-    // No data yet — return all active accounts with 0 balances
+    // No data yet — return all active accounts with 0 balances.
+    // Use NUMERIC(15,2) so the zero value carries decimal scale and Neon
+    // returns it as "0.00" (string) rather than plain 0 (integer-like).
     const accounts = await sql`
       SELECT
         g.id AS gl_account_id,
-        0::numeric AS beg_balance,
-        0::numeric AS end_balance,
+        0::numeric(15,2) AS beg_balance,
+        0::numeric(15,2) AS end_balance,
         g.account_no,
         g.description,
         g.normal_balance,
@@ -135,13 +137,25 @@ export async function POST(req: NextRequest) {
     }
 
     for (const row of balances) {
+      // Explicitly parse as float — guards against any accidental parseInt
+      // coercion that would silently truncate cents (e.g. 9987.74 → 9987).
+      const begBalance = parseFloat(String(row.beg_balance));
+      const endBalance = parseFloat(String(row.end_balance));
+
+      if (!isFinite(begBalance) || !isFinite(endBalance)) {
+        return NextResponse.json(
+          { error: `Non-numeric balance for account ${row.gl_account_id}` },
+          { status: 400 }
+        );
+      }
+
       await sql`
         INSERT INTO weekly_balances (week_ending, gl_account_id, beg_balance, end_balance)
         VALUES (
           ${week_ending}::date,
           ${row.gl_account_id},
-          ${row.beg_balance},
-          ${row.end_balance}
+          ${begBalance},
+          ${endBalance}
         )
         ON CONFLICT (week_ending, gl_account_id) DO UPDATE
           SET beg_balance = EXCLUDED.beg_balance,

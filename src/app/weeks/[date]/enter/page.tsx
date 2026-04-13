@@ -45,20 +45,32 @@ function fmtDate(iso: string) {
   return `${m}/${d}/${y}`;
 }
 
-/** Format a numeric string with commas for display. */
-function formatDisplay(raw: string): string {
-  const n = parseFloat(raw.replace(/,/g, ""));
-  if (isNaN(n)) return raw;
+/**
+ * Format a value as a comma-separated dollar amount with exactly 2 decimal
+ * places.  Accepts either a string (possibly already comma-formatted) or a
+ * number — Neon may return NUMERIC columns as JS numbers in some driver
+ * versions, so we normalise here.
+ */
+function formatDisplay(raw: string | number): string {
+  const str = String(raw).replace(/,/g, "");
+  const n = parseFloat(str);
+  if (isNaN(n)) return String(raw);
   const neg = n < 0;
   const abs = Math.abs(n);
+  // Use the original stripped string to avoid float→string precision bleed
+  // (e.g. parseFloat("9987.74") === 9987.74 but String(9987.74) might differ
+  // for edge-case values; toFixed(2) on the abs value is the canonical fix).
   const parts = abs.toFixed(2).split(".");
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return (neg ? "-" : "") + parts.join(".");
 }
 
-/** Strip commas to get the raw number string for parsing. */
-function parseRaw(s: string): number {
-  const n = parseFloat(s.replace(/,/g, ""));
+/**
+ * Strip commas and parse to a float for submission.  Accepts string or number
+ * so callers don't need to pre-convert API responses.
+ */
+function parseRaw(s: string | number): number {
+  const n = parseFloat(String(s).replace(/,/g, ""));
   return isNaN(n) ? 0 : n;
 }
 
@@ -87,10 +99,11 @@ function MoneyInput({
 
   function handleBlur() {
     setFocused(false);
-    // Format on blur
-    const n = parseFloat(value.replace(/,/g, ""));
-    if (!isNaN(n)) {
-      onChange(formatDisplay(String(n)));
+    // Use the already-stripped string directly — avoids float→String(n) round-
+    // trip which can introduce precision noise for certain decimal values.
+    const stripped = value.replace(/,/g, "");
+    if (!isNaN(parseFloat(stripped))) {
+      onChange(formatDisplay(stripped));
     }
   }
 
@@ -260,8 +273,9 @@ export default function EnterWeekPage({
       const map: BalanceMap = {};
       for (const row of rows) {
         const begFromPrior = priorEndMap[row.gl_account_id];
+        // parseRaw handles both string ("9987.74") and number (9987.74) from Neon
         const hasCurrentData =
-          parseFloat(row.beg_balance) !== 0 || parseFloat(row.end_balance) !== 0;
+          parseRaw(row.beg_balance) !== 0 || parseRaw(row.end_balance) !== 0;
 
         map[row.gl_account_id] = {
           beg: hasCurrentData
