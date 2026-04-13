@@ -6,6 +6,9 @@ import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards"
 import WeeklyCharts from "@/components/dashboard/WeeklyCharts";
 import BacklogCharts from "@/components/dashboard/BacklogCharts";
 import MonthlySection from "@/components/dashboard/MonthlySection";
+import ExecutiveSummary from "@/components/dashboard/ExecutiveSummary";
+import RatioTrends from "@/components/dashboard/RatioTrends";
+import DashboardPDF from "@/components/dashboard/DashboardPDF";
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────
 
@@ -45,6 +48,19 @@ function ChartSkeletons() {
   );
 }
 
+function RatioSkeletons() {
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <ChartSkeleton height={260} />
+        <ChartSkeleton height={260} />
+        <ChartSkeleton height={260} />
+      </div>
+      <ChartSkeleton height={220} />
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -52,7 +68,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  function fetchData() {
+    setLoading(true);
+    setError("");
     fetch("/api/metrics")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -61,6 +79,10 @@ export default function DashboardPage() {
       .then(setData)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    fetchData();
   }, []);
 
   const weeks  = data?.weeks  ?? [];
@@ -79,25 +101,27 @@ export default function DashboardPage() {
               : "Weekly metrics overview"}
           </p>
         </div>
-        {data && !loading && (
+        <div className="flex items-center gap-2">
+          {data && !loading && (
+            <DashboardPDF weeks={weeks} months={months} />
+          )}
           <button
-            onClick={() => {
-              setLoading(true);
-              setError("");
-              fetch("/api/metrics")
-                .then((r) => r.json())
-                .then(setData)
-                .catch((e) => setError(String(e)))
-                .finally(() => setLoading(false));
-            }}
-            className="btn-secondary flex items-center gap-2"
+            onClick={fetchData}
+            disabled={loading}
+            className="btn-secondary flex items-center gap-2 disabled:opacity-50"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg
+              className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             Refresh
           </button>
-        )}
+        </div>
       </div>
 
       {/* Error state */}
@@ -110,7 +134,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Empty state — no data at all */}
+      {/* Empty state */}
       {!loading && !error && weeks.length === 0 && (
         <div className="card px-6 py-16 text-center mb-6">
           <p className="text-gray-500 text-sm mb-2 font-medium">No weekly data yet.</p>
@@ -123,6 +147,12 @@ export default function DashboardPage() {
       )}
 
       <div className="flex flex-col gap-10">
+        {/* 0 — Executive Summary */}
+        {!loading && weeks.length > 0 && (
+          <ExecutiveSummary weeks={weeks} months={months} />
+        )}
+        {loading && <ChartSkeleton height={260} />}
+
         {/* 1 — KPI Cards */}
         <Section title="Key Metrics">
           {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
@@ -133,7 +163,12 @@ export default function DashboardPage() {
           {loading ? <ChartSkeletons /> : <WeeklyCharts weeks={weeks} />}
         </Section>
 
-        {/* 3 — Backlog & Pipeline */}
+        {/* 3 — Financial Health Ratios */}
+        <Section title="Financial Health Ratios — Trending">
+          {loading ? <RatioSkeletons /> : <RatioTrends weeks={weeks} />}
+        </Section>
+
+        {/* 4 — Backlog & Pipeline */}
         <Section title="Backlog & Pipeline">
           {loading ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -145,7 +180,7 @@ export default function DashboardPage() {
           )}
         </Section>
 
-        {/* 4 — Monthly Analysis */}
+        {/* 5 — Monthly Analysis */}
         <Section title="Monthly Analysis">
           {loading ? (
             <div className="flex flex-col gap-5">

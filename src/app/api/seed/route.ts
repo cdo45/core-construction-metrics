@@ -88,6 +88,34 @@ export async function POST() {
       )
     `;
 
+    // Create weekly_transactions table (Foundation GL import)
+    await sql`
+      CREATE TABLE IF NOT EXISTS weekly_transactions (
+        id              SERIAL PRIMARY KEY,
+        week_ending     DATE NOT NULL,
+        gl_account_id   INT NOT NULL REFERENCES gl_accounts(id),
+        full_account_no VARCHAR(20),
+        trx_date        DATE,
+        journal         VARCHAR(10),
+        audit_no        VARCHAR(20),
+        gl_trx_no       VARCHAR(20),
+        line            VARCHAR(10),
+        job             VARCHAR(50),
+        description     VARCHAR(255),
+        debit           NUMERIC(15,2) NOT NULL DEFAULT 0,
+        credit          NUMERIC(15,2) NOT NULL DEFAULT 0,
+        vendor_cust_no  VARCHAR(20),
+        trx_no          VARCHAR(20),
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_wt_week    ON weekly_transactions(week_ending)
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_wt_account ON weekly_transactions(gl_account_id)
+    `;
+
     // Insert default categories only if a row with that name doesn't already exist.
     // Using WHERE NOT EXISTS instead of ON CONFLICT because categories has no
     // unique constraint on name — this keeps the insert fully idempotent.

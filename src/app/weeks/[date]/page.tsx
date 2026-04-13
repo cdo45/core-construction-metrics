@@ -39,6 +39,32 @@ interface CategoryGroup {
   rows: BalanceRow[];
 }
 
+interface TrxRow {
+  id: number;
+  trx_date: string | null;
+  journal: string | null;
+  audit_no: string | null;
+  gl_trx_no: string | null;
+  line: string | null;
+  job: string | null;
+  description: string | null;
+  debit: number;
+  credit: number;
+  vendor_cust_no: string | null;
+  trx_no: string | null;
+}
+
+interface TrxSummary {
+  account_no: number;
+  description: string;
+  normal_balance: "debit" | "credit";
+  beg_balance: number;
+  end_balance: number;
+  total_debits: number;
+  total_credits: number;
+  net_activity: number;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmtDate(iso: string) {
@@ -78,9 +104,184 @@ function ChangeCell({ beg, end }: { beg: string; end: string }) {
   );
 }
 
-// ─── Collapsible Category Section ────────────────────────────────────────────
+// ─── Transaction Modal ────────────────────────────────────────────────────────
 
-function CategorySection({ group }: { group: CategoryGroup }) {
+function TransactionModal({
+  weekEnding,
+  accountNo,
+  categoryColor,
+  onClose,
+}: {
+  weekEnding: string;
+  accountNo: number;
+  categoryColor: string;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<TrxSummary | null>(null);
+  const [transactions, setTransactions] = useState<TrxRow[]>([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/transactions?week_ending=${weekEnding}&account_no=${accountNo}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json()).error ?? `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        setSummary(data.summary);
+        setTransactions(data.transactions ?? []);
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [weekEnding, accountNo]);
+
+  // Close on backdrop click
+  function handleBackdrop(e: React.MouseEvent) {
+    if (e.target === e.currentTarget) onClose();
+  }
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-10 pb-6 px-4 overflow-y-auto"
+      onClick={handleBackdrop}
+    >
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh]">
+        {/* Modal header */}
+        <div
+          className="flex items-center justify-between px-5 py-4 rounded-t-xl flex-shrink-0"
+          style={{ backgroundColor: categoryColor }}
+        >
+          <div>
+            <p className="text-xs font-semibold text-white/70 uppercase tracking-wider">
+              Account {accountNo}
+            </p>
+            <p className="text-sm font-bold text-white">
+              {summary ? summary.description : "Loading…"}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-white/70 hover:text-white transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <svg className="animate-spin w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+          </div>
+        ) : error ? (
+          <div className="px-5 py-8 text-center text-sm text-red-600">{error}</div>
+        ) : (
+          <>
+            {/* Balance summary */}
+            {summary && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 px-5 py-4 border-b border-gray-200 flex-shrink-0">
+                {[
+                  { label: "Beg Balance", value: fmtMoney(summary.beg_balance) },
+                  { label: "Total Debits", value: fmtMoney(summary.total_debits) },
+                  { label: "Total Credits", value: fmtMoney(summary.total_credits) },
+                  {
+                    label: "Net Activity",
+                    value: fmtMoney(summary.net_activity),
+                    colored: true,
+                    positive: summary.net_activity >= 0,
+                  },
+                  { label: "End Balance", value: fmtMoney(summary.end_balance), bold: true },
+                ].map((item) => (
+                  <div key={item.label}>
+                    <p className="text-xs text-gray-500">{item.label}</p>
+                    <p
+                      className={`text-sm font-semibold tabular-nums ${
+                        item.bold
+                          ? "text-gray-900"
+                          : item.colored
+                          ? item.positive
+                            ? "text-green-700"
+                            : "text-red-600"
+                          : "text-gray-700"
+                      }`}
+                    >
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Transaction table */}
+            {transactions.length === 0 ? (
+              <div className="px-5 py-10 text-center text-sm text-gray-400 italic">
+                No transactions imported for this account.
+              </div>
+            ) : (
+              <div className="overflow-auto flex-1">
+                <table className="w-full min-w-[720px] text-xs">
+                  <thead className="sticky top-0 bg-white z-10">
+                    <tr>
+                      <th className="table-th">Date</th>
+                      <th className="table-th">Journal</th>
+                      <th className="table-th">Audit #</th>
+                      <th className="table-th">Job</th>
+                      <th className="table-th">Description</th>
+                      <th className="table-th text-right">Debit</th>
+                      <th className="table-th text-right">Credit</th>
+                      <th className="table-th">Vnd/Cust</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transactions.map((t) => (
+                      <tr key={t.id} className="hover:bg-gray-50">
+                        <td className="table-td text-gray-600 whitespace-nowrap">{t.trx_date ?? "—"}</td>
+                        <td className="table-td text-gray-500">{t.journal}</td>
+                        <td className="table-td font-mono text-gray-500">{t.audit_no}</td>
+                        <td className="table-td text-gray-500">{t.job}</td>
+                        <td className="table-td text-gray-800 max-w-[180px] truncate">{t.description}</td>
+                        <td className="table-td text-right tabular-nums text-gray-700">
+                          {t.debit > 0 ? fmtMoney(t.debit) : ""}
+                        </td>
+                        <td className="table-td text-right tabular-nums text-gray-700">
+                          {t.credit > 0 ? fmtMoney(t.credit) : ""}
+                        </td>
+                        <td className="table-td text-gray-500">{t.vendor_cust_no}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Collapsible Category Section ─────────────────────────────────────────────
+
+function CategorySection({
+  group,
+  onAccountClick,
+}: {
+  group: CategoryGroup;
+  onAccountClick: (accountNo: number, color: string) => void;
+}) {
   const [open, setOpen] = useState(true);
 
   const totalBeg = group.rows.reduce((s, r) => s + parseFloat(r.beg_balance), 0);
@@ -131,11 +332,18 @@ function CategorySection({ group }: { group: CategoryGroup }) {
             </thead>
             <tbody>
               {group.rows.map((row) => (
-                <tr key={row.gl_account_id} className="hover:bg-gray-50">
+                <tr
+                  key={row.gl_account_id}
+                  className="hover:bg-gray-50 cursor-pointer group"
+                  onClick={() => onAccountClick(row.account_no, group.color)}
+                  title="Click to view transactions"
+                >
                   <td className="table-td font-mono text-xs text-gray-500">
                     {row.account_no}
                   </td>
-                  <td className="table-td text-gray-800">{row.description}</td>
+                  <td className="table-td text-gray-800 group-hover:text-[#1B2A4A] group-hover:underline">
+                    {row.description}
+                  </td>
                   <td className="table-td text-right text-gray-600">
                     {fmtMoney(row.beg_balance)}
                   </td>
@@ -188,6 +396,7 @@ export default function WeekDetailPage({
   const [report, setReport] = useState<WeeklyReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [modalAccount, setModalAccount] = useState<{ accountNo: number; color: string } | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -277,7 +486,13 @@ export default function WeekDetailPage({
         <div className="flex flex-col gap-5">
           {/* Category sections */}
           {categoryGroups.map((g) => (
-            <CategorySection key={g.name} group={g} />
+            <CategorySection
+              key={g.name}
+              group={g}
+              onAccountClick={(accountNo, color) =>
+                setModalAccount({ accountNo, color })
+              }
+            />
           ))}
 
           {/* Bid Activity card */}
@@ -381,6 +596,16 @@ export default function WeekDetailPage({
             </div>
           )}
         </div>
+      )}
+
+      {/* Transaction detail modal */}
+      {modalAccount && (
+        <TransactionModal
+          weekEnding={date}
+          accountNo={modalAccount.accountNo}
+          categoryColor={modalAccount.color}
+          onClose={() => setModalAccount(null)}
+        />
       )}
     </div>
   );

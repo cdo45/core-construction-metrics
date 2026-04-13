@@ -20,6 +20,13 @@ export interface WeekMetric {
   bids_submitted_value: number;
   bids_won_count: number;
   bids_won_value: number;
+  // Financial health ratios
+  current_ratio: number | null;       // (cash + ar) / (ap + payroll)
+  quick_ratio: number | null;         // cash / (ap + payroll)
+  ar_to_ap: number | null;            // ar / ap
+  net_liquidity: number;              // cash - ap - payroll (alias of net_position)
+  payroll_coverage: number | null;    // cash / payroll
+  cash_coverage_weeks: number | null; // cash / abs(avg weekly cash burn)
 }
 
 export interface MonthMetric {
@@ -86,7 +93,7 @@ export async function GET() {
     `;
 
     // ── 2. Compute WoW deltas in application layer ────────────────────────────
-    const weeks: WeekMetric[] = rawWeeks.map((row, i) => {
+    const weeksBase = rawWeeks.map((row, i) => {
       const cash    = n(row.cash);
       const ar      = n(row.ar);
       const ap      = n(row.ap);
@@ -105,11 +112,15 @@ export async function GET() {
         ar_change      = ar      - n(prev.ar);
         ap_change      = ap      - n(prev.ap);
         payroll_change = payroll - n(prev.payroll);
-        // AR collected = reduction in AR from prior week (positive = good)
         ar_collected   = n(prev.ar) - ar;
-        // AP paid down = reduction in AP from prior week (positive = good)
         ap_paid        = n(prev.ap) - ap;
       }
+
+      const liabilities = ap + payroll;
+      const current_ratio    = liabilities > 0 ? (cash + ar) / liabilities : null;
+      const quick_ratio      = liabilities > 0 ? cash / liabilities : null;
+      const ar_to_ap         = ap > 0 ? ar / ap : null;
+      const payroll_coverage = payroll > 0 ? cash / payroll : null;
 
       return {
         week_ending: row.week_ending as string,
@@ -128,8 +139,31 @@ export async function GET() {
         bids_submitted_value: n(row.bids_submitted_value),
         bids_won_count:       n(row.bids_won_count),
         bids_won_value:       n(row.bids_won_value),
+        current_ratio,
+        quick_ratio,
+        ar_to_ap,
+        net_liquidity: cash - ap - payroll,
+        payroll_coverage,
+        cash_coverage_weeks: null as number | null, // filled in pass 2
       };
     });
+
+    // ── Pass 2: compute global avg cash burn → cash_coverage_weeks ───────────
+    const cashChanges = weeksBase
+      .filter((w) => w.cash_change !== null)
+      .map((w) => w.cash_change!);
+    const avgCashChange =
+      cashChanges.length > 0
+        ? cashChanges.reduce((s, v) => s + v, 0) / cashChanges.length
+        : 0;
+
+    const weeks: WeekMetric[] = weeksBase.map((w) => ({
+      ...w,
+      cash_coverage_weeks:
+        avgCashChange < 0 && w.cash > 0
+          ? w.cash / Math.abs(avgCashChange)
+          : null,
+    }));
 
     // ── 3. Monthly aggregates ─────────────────────────────────────────────────
     // Group weeks by YYYY-MM and average the category totals.
