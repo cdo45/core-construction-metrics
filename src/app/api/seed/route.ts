@@ -42,6 +42,27 @@ export async function POST() {
       )
     `;
 
+    // Safety: if the table was previously created with wrong column types (e.g.
+    // INTEGER or unscaled NUMERIC), coerce them to NUMERIC(15,2) now.
+    // This is idempotent — altering a NUMERIC(15,2) column to NUMERIC(15,2) is
+    // a no-op in Postgres.
+    await sql`
+      ALTER TABLE weekly_balances
+        ALTER COLUMN beg_balance TYPE NUMERIC(15,2)
+          USING beg_balance::NUMERIC(15,2),
+        ALTER COLUMN end_balance TYPE NUMERIC(15,2)
+          USING end_balance::NUMERIC(15,2)
+    `;
+
+    // Same safety ALTER for bid_activity value columns.
+    await sql`
+      ALTER TABLE bid_activity
+        ALTER COLUMN bids_submitted_value TYPE NUMERIC(15,2)
+          USING bids_submitted_value::NUMERIC(15,2),
+        ALTER COLUMN bids_won_value TYPE NUMERIC(15,2)
+          USING bids_won_value::NUMERIC(15,2)
+    `;
+
     // Create bid_activity table
     await sql`
       CREATE TABLE IF NOT EXISTS bid_activity (

@@ -292,8 +292,8 @@ export default function WeekDetailPage({
                       {new Intl.NumberFormat("en-US", {
                         style: "currency",
                         currency: "USD",
-                        minimumFractionDigits: 0,
-                        maximumFractionDigits: 0,
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
                       }).format(parseFloat(bids.bids_submitted_value))}
                     </p>
                   </div>
@@ -306,8 +306,8 @@ export default function WeekDetailPage({
                       {new Intl.NumberFormat("en-US", {
                         style: "currency",
                         currency: "USD",
-                        minimumFractionDigits: 0,
-                        maximumFractionDigits: 0,
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
                       }).format(parseFloat(bids.bids_won_value))}
                     </p>
                   </div>
