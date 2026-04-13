@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import CSVImporter from "@/components/CSVImporter";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -291,57 +292,58 @@ export default function EnterWeekPage({
     []
   );
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const [curRes, priorRes, bidRes, noteRes] = await Promise.all([
-          fetch(`/api/weekly-balances?week_ending=${date}`),
-          fetch(`/api/weekly-balances?week_ending=${date}&prior=1`),
-          fetch(`/api/bid-activity?week_ending=${date}`),
-          fetch(`/api/weekly-notes?week_ending=${date}`),
-        ]);
+  const loadBalances = useCallback(async () => {
+    try {
+      const [curRes, priorRes, bidRes, noteRes] = await Promise.all([
+        fetch(`/api/weekly-balances?week_ending=${date}`),
+        fetch(`/api/weekly-balances?week_ending=${date}&prior=1`),
+        fetch(`/api/bid-activity?week_ending=${date}`),
+        fetch(`/api/weekly-notes?week_ending=${date}`),
+      ]);
 
-        const curData = curRes.ok ? await curRes.json() : { balances: [] };
-        const priorData = priorRes.ok ? await priorRes.json() : { balances: [] };
+      const curData = curRes.ok ? await curRes.json() : { balances: [] };
+      const priorData = priorRes.ok ? await priorRes.json() : { balances: [] };
 
-        const rows: BalanceRow[] = curData.balances ?? [];
-        const priorBalances: BalanceRow[] = priorData.balances ?? [];
+      const rows: BalanceRow[] = curData.balances ?? [];
+      const priorBalances: BalanceRow[] = priorData.balances ?? [];
 
-        // Build prior end balance map for beg_balance auto-fill
-        const priorEndMap: Record<number, string> = {};
-        for (const b of priorBalances) {
-          priorEndMap[b.gl_account_id] = b.end_balance;
-        }
-
-        setAccounts(rows);
-        setCategoryGroups(buildGroups(rows));
-        setBalanceMap(initBalanceMap(rows, priorEndMap));
-
-        if (bidRes.ok) {
-          const bidData = await bidRes.json();
-          if (bidData) {
-            setBids({
-              bids_submitted_count: String(bidData.bids_submitted_count ?? ""),
-              bids_submitted_value: formatDisplay(String(bidData.bids_submitted_value ?? "0")),
-              bids_won_count: String(bidData.bids_won_count ?? ""),
-              bids_won_value: formatDisplay(String(bidData.bids_won_value ?? "0")),
-              notes: bidData.notes ?? "",
-            });
-          }
-        }
-
-        if (noteRes.ok) {
-          const noteData = await noteRes.json();
-          if (noteData) {
-            setNotes({ doc_link: noteData.doc_link ?? "", summary: noteData.summary ?? "" });
-          }
-        }
-      } finally {
-        setLoading(false);
+      // Build prior end balance map for beg_balance auto-fill
+      const priorEndMap: Record<number, string> = {};
+      for (const b of priorBalances) {
+        priorEndMap[b.gl_account_id] = b.end_balance;
       }
+
+      setAccounts(rows);
+      setCategoryGroups(buildGroups(rows));
+      setBalanceMap(initBalanceMap(rows, priorEndMap));
+
+      if (bidRes.ok) {
+        const bidData = await bidRes.json();
+        if (bidData) {
+          setBids({
+            bids_submitted_count: String(bidData.bids_submitted_count ?? ""),
+            bids_submitted_value: formatDisplay(String(bidData.bids_submitted_value ?? "0")),
+            bids_won_count: String(bidData.bids_won_count ?? ""),
+            bids_won_value: formatDisplay(String(bidData.bids_won_value ?? "0")),
+            notes: bidData.notes ?? "",
+          });
+        }
+      }
+
+      if (noteRes.ok) {
+        const noteData = await noteRes.json();
+        if (noteData) {
+          setNotes({ doc_link: noteData.doc_link ?? "", summary: noteData.summary ?? "" });
+        }
+      }
+    } finally {
+      setLoading(false);
     }
-    load();
   }, [date, buildGroups, initBalanceMap]);
+
+  useEffect(() => {
+    loadBalances();
+  }, [loadBalances]);
 
   // ── Copy Prior Week ───────────────────────────────────────────────────────
 
@@ -519,6 +521,15 @@ export default function EnterWeekPage({
         </div>
       ) : (
         <div className="flex flex-col gap-5">
+          {/* CSV Import */}
+          <CSVImporter
+            weekEnding={date}
+            onImportComplete={() => {
+              setLoading(true);
+              loadBalances();
+            }}
+          />
+
           {/* Balance entry sections by category */}
           {categoryGroups.map((g) => (
             <CategoryEnterSection
