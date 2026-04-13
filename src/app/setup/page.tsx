@@ -44,63 +44,6 @@ function ColorDot({ color }: { color: string }) {
   );
 }
 
-// ─── Seed Banner ─────────────────────────────────────────────────────────────
-
-function SeedBanner() {
-  const [status, setStatus] = useState<"idle" | "loading" | "ok" | "error">("idle");
-  const [msg, setMsg] = useState("");
-
-  async function runSeed() {
-    setStatus("loading");
-    try {
-      const res = await fetch("/api/seed", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        setStatus("ok");
-        setMsg(data.message ?? "Seeded successfully.");
-      } else {
-        setStatus("error");
-        setMsg(data.error ?? "Unknown error.");
-      }
-    } catch (e) {
-      setStatus("error");
-      setMsg(String(e));
-    }
-  }
-
-  if (status === "ok") {
-    return (
-      <div className="mb-6 flex items-center gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800">
-        <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-        </svg>
-        {msg}
-      </div>
-    );
-  }
-
-  return (
-    <div className="mb-6 flex flex-wrap items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-amber-800 font-medium">First time here?</p>
-        <p className="text-xs text-amber-700 mt-0.5">
-          Run the seed script to create the database tables and default categories.
-        </p>
-        {status === "error" && (
-          <p className="text-xs text-red-600 mt-1 font-mono">{msg}</p>
-        )}
-      </div>
-      <button
-        onClick={runSeed}
-        disabled={status === "loading"}
-        className="btn-primary shrink-0"
-      >
-        {status === "loading" ? "Seeding…" : "Seed Database"}
-      </button>
-    </div>
-  );
-}
-
 // ─── Categories Section ───────────────────────────────────────────────────────
 
 function CategoriesSection({
@@ -159,7 +102,7 @@ function CategoriesSection({
       {/* Category list */}
       <div className="px-6 py-4">
         {categories.length === 0 ? (
-          <p className="text-sm text-gray-400 italic">No categories yet. Run seed or add one below.</p>
+          <p className="text-sm text-gray-400 italic">No categories yet. Add one using the form below.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {categories.map((cat) => (
@@ -603,8 +546,6 @@ export default function SetupPage() {
           Configure categories and GL accounts for weekly reporting.
         </p>
       </div>
-
-      <SeedBanner />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

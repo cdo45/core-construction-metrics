@@ -67,7 +67,9 @@ export async function POST() {
       )
     `;
 
-    // Insert default categories (skip if they already exist by name)
+    // Insert default categories only if a row with that name doesn't already exist.
+    // Using WHERE NOT EXISTS instead of ON CONFLICT because categories has no
+    // unique constraint on name — this keeps the insert fully idempotent.
     const defaultCategories = [
       { name: "Cash on Hand",        sort_order: 1, color: "#548235" },
       { name: "Who Owes Us",         sort_order: 2, color: "#4472C4" },
@@ -78,8 +80,10 @@ export async function POST() {
     for (const cat of defaultCategories) {
       await sql`
         INSERT INTO categories (name, sort_order, color)
-        VALUES (${cat.name}, ${cat.sort_order}, ${cat.color})
-        ON CONFLICT DO NOTHING
+        SELECT ${cat.name}, ${cat.sort_order}, ${cat.color}
+        WHERE NOT EXISTS (
+          SELECT 1 FROM categories WHERE name = ${cat.name}
+        )
       `;
     }
 
