@@ -414,49 +414,27 @@ export async function GET() {
         ? avgWeeklyArCollection / avgAR
         : 0.1; // fallback 10%
 
-    // ── 3b. Trailing 4-week overhead averages ────────────────────────────────
+    // ── 3b. Trailing 4-week overhead averages from weekly_balances ───────────
     let avgOverheadCashBurn = 0;
     let avgOverheadNonCash  = 0;
     let latestOverheadCash  = 0;
 
-    try {
-      const ohRows = await sql`
-        SELECT
-          wos.week_ending::text,
-          COALESCE(SUM(CASE WHEN g.is_non_cash = FALSE THEN wos.net_activity ELSE 0 END), 0)::numeric AS cash_oh,
-          COALESCE(SUM(CASE WHEN g.is_non_cash = TRUE  THEN wos.net_activity ELSE 0 END), 0)::numeric AS non_cash_oh
-        FROM weekly_overhead_spend wos
-        JOIN gl_accounts g ON g.id = wos.gl_account_id
-        WHERE wos.division = '99'
-        GROUP BY wos.week_ending
-        ORDER BY wos.week_ending DESC
-        LIMIT 4
-      `;
-      if (ohRows.length > 0) {
-        avgOverheadCashBurn = ohRows.reduce((s, r) => s + n(r.cash_oh),     0) / ohRows.length;
-        avgOverheadNonCash  = ohRows.reduce((s, r) => s + n(r.non_cash_oh), 0) / ohRows.length;
-        latestOverheadCash  = n(ohRows[0].cash_oh);
-      }
-    } catch {
-      // is_non_cash column may not exist yet — try without it
-      try {
-        const ohRows = await sql`
-          SELECT
-            week_ending::text,
-            COALESCE(SUM(net_activity), 0)::numeric AS cash_oh
-          FROM weekly_overhead_spend
-          WHERE division = '99'
-          GROUP BY week_ending
-          ORDER BY week_ending DESC
-          LIMIT 4
-        `;
-        if (ohRows.length > 0) {
-          avgOverheadCashBurn = ohRows.reduce((s, r) => s + n(r.cash_oh), 0) / ohRows.length;
-          latestOverheadCash  = n(ohRows[0].cash_oh);
-        }
-      } catch {
-        // no overhead data available
-      }
+    const ohRows = await sql`
+      SELECT
+        wb.week_ending::text,
+        SUM(wb.period_debit - wb.period_credit)::numeric AS net_overhead
+      FROM weekly_balances wb
+      JOIN gl_accounts g  ON g.id = wb.gl_account_id
+      JOIN categories  c  ON c.id = g.category_id
+      WHERE c.name = 'Overhead (Div 99)'
+      GROUP BY wb.week_ending
+      ORDER BY wb.week_ending DESC
+      LIMIT 4
+    `;
+    if (ohRows.length > 0) {
+      avgOverheadCashBurn = ohRows.reduce((s, r) => s + n(r.net_overhead), 0) / ohRows.length;
+      avgOverheadNonCash  = 0;
+      latestOverheadCash  = n(ohRows[0].net_overhead);
     }
 
     const rates: BaselineRates = {

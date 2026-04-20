@@ -11,61 +11,34 @@ export async function GET(
   { params }: { params: Promise<{ date: string }> },
 ) {
   const { date } = await params;
-  const type = req.nextUrl.searchParams.get("type") ?? "full_gl";
-
-  if (type !== "full_gl" && type !== "overhead") {
-    return NextResponse.json(
-      { error: "type must be 'full_gl' or 'overhead'" },
-      { status: 400 },
-    );
-  }
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return NextResponse.json(
-      { error: "date must be YYYY-MM-DD" },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
   }
 
   try {
     const sql = getDb();
 
-    let row_count  = 0;
-    let total_debit  = 0;
-    let total_credit = 0;
+    // Count existing weekly_balances rows for this week
+    const balRows = await sql`
+      SELECT
+        COUNT(*)                           AS row_count,
+        COALESCE(SUM(period_debit),  0)    AS total_debit,
+        COALESCE(SUM(period_credit), 0)    AS total_credit
+      FROM weekly_balances
+      WHERE week_ending = ${date}
+    `;
 
-    if (type === "full_gl") {
-      const rows = await sql`
-        SELECT
-          COUNT(*)                        AS row_count,
-          COALESCE(SUM(debit),  0)        AS total_debit,
-          COALESCE(SUM(credit), 0)        AS total_credit
-        FROM weekly_transactions
-        WHERE week_ending = ${date}
-      `;
-      row_count    = Number(rows[0].row_count    ?? 0);
-      total_debit  = n(rows[0].total_debit);
-      total_credit = n(rows[0].total_credit);
-    } else {
-      const rows = await sql`
-        SELECT
-          COUNT(*)                              AS row_count,
-          COALESCE(SUM(weekly_debit),  0)       AS total_debit,
-          COALESCE(SUM(weekly_credit), 0)       AS total_credit
-        FROM weekly_overhead_spend
-        WHERE week_ending = ${date} AND division = '99'
-      `;
-      row_count    = Number(rows[0].row_count    ?? 0);
-      total_debit  = n(rows[0].total_debit);
-      total_credit = n(rows[0].total_credit);
-    }
+    const row_count    = Number(balRows[0].row_count    ?? 0);
+    const total_debit  = n(balRows[0].total_debit);
+    const total_credit = n(balRows[0].total_credit);
 
-    // Most recent successful import timestamp for this week + type
+    // Most recent successful trial_balance import for this week
     const logRows = await sql`
       SELECT created_at
       FROM import_log
-      WHERE week_ending = ${date}
-        AND import_type  = ${type}
+      WHERE week_ending  = ${date}
+        AND import_type  = 'trial_balance'
         AND status       = 'success'
       ORDER BY created_at DESC
       LIMIT 1

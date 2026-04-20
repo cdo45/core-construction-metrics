@@ -24,7 +24,10 @@ export async function GET() {
         SELECT
           wb.week_ending,
           c.name AS category_name,
-          SUM(wb.end_balance) AS total
+          CASE WHEN bool_or(g.is_pl_flow)
+               THEN SUM(wb.period_debit - wb.period_credit)
+               ELSE SUM(wb.end_balance)
+          END AS total
         FROM weekly_balances wb
         JOIN gl_accounts g ON g.id = wb.gl_account_id
         LEFT JOIN categories c ON c.id = g.category_id
@@ -36,6 +39,8 @@ export async function GET() {
         MAX(CASE WHEN ct.category_name = 'Who Owes Us'         THEN ct.total ELSE 0 END) AS ar_total,
         MAX(CASE WHEN ct.category_name = 'Who We Owe'          THEN ct.total ELSE 0 END) AS ap_total,
         MAX(CASE WHEN ct.category_name = 'Payroll Liabilities' THEN ct.total ELSE 0 END) AS payroll_total,
+        MAX(CASE WHEN ct.category_name = 'Payroll (Field)'     THEN ct.total ELSE 0 END) AS payroll_field_total,
+        MAX(CASE WHEN ct.category_name = 'Overhead (Div 99)'   THEN ct.total ELSE 0 END) AS overhead_total,
         ba.bids_submitted_count,
         ba.bids_submitted_value,
         ba.bids_won_count,

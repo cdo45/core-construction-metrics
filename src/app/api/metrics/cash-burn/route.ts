@@ -142,59 +142,35 @@ export async function GET() {
       // table may not exist yet — use default
     }
 
-    // ── 3. Overhead spend (last 4 weeks) with is_non_cash classification ──────
+    // ── 3. Overhead spend (last 4 weeks) from weekly_balances ────────────────
     interface OverheadWeek {
-      week_ending:      string;
-      cash_overhead:    number;
+      week_ending:       string;
+      cash_overhead:     number;
       non_cash_overhead: number;
     }
 
-    let overheadWeeks: OverheadWeek[] = [];
+    const ohRows = await sql`
+      SELECT
+        wb.week_ending::text,
+        SUM(wb.period_debit - wb.period_credit)::numeric AS net_overhead
+      FROM weekly_balances wb
+      JOIN gl_accounts g ON g.id = wb.gl_account_id
+      JOIN categories  c ON c.id = g.category_id
+      WHERE c.name = 'Overhead (Div 99)'
+      GROUP BY wb.week_ending
+      ORDER BY wb.week_ending DESC
+      LIMIT 4
+    `;
 
-    try {
-      const rows = await sql`
-        SELECT
-          wos.week_ending::text,
-          COALESCE(SUM(CASE WHEN g.is_non_cash = FALSE THEN wos.net_activity ELSE 0 END), 0)::numeric AS cash_overhead,
-          COALESCE(SUM(CASE WHEN g.is_non_cash = TRUE  THEN wos.net_activity ELSE 0 END), 0)::numeric AS non_cash_overhead
-        FROM weekly_overhead_spend wos
-        JOIN gl_accounts g ON g.id = wos.gl_account_id
-        WHERE wos.division = '99'
-        GROUP BY wos.week_ending
-        ORDER BY wos.week_ending DESC
-        LIMIT 4
-      `;
-      overheadWeeks = rows.map((r) => ({
-        week_ending:       r.week_ending as string,
-        cash_overhead:     n(r.cash_overhead),
-        non_cash_overhead: n(r.non_cash_overhead),
-      }));
-    } catch {
-      // is_non_cash column may not exist — treat all as cash
-      try {
-        const rows = await sql`
-          SELECT
-            week_ending::text,
-            COALESCE(SUM(net_activity), 0)::numeric AS cash_overhead
-          FROM weekly_overhead_spend
-          WHERE division = '99'
-          GROUP BY week_ending
-          ORDER BY week_ending DESC
-          LIMIT 4
-        `;
-        overheadWeeks = rows.map((r) => ({
-          week_ending:       r.week_ending as string,
-          cash_overhead:     n(r.cash_overhead),
-          non_cash_overhead: 0,
-        }));
-      } catch {
-        // no overhead data
-      }
-    }
+    const overheadWeeks: OverheadWeek[] = ohRows.map((r) => ({
+      week_ending:       r.week_ending as string,
+      cash_overhead:     n(r.net_overhead),
+      non_cash_overhead: 0,
+    }));
 
     const overheadDataWeeks = overheadWeeks.length;
     const avgOverheadCash    = avgOf(overheadWeeks.map((w) => w.cash_overhead));
-    const avgOverheadNonCash = avgOf(overheadWeeks.map((w) => w.non_cash_overhead));
+    const avgOverheadNonCash = 0;
 
     const data_confidence: "low" | "medium" | "high" =
       overheadDataWeeks >= 4 ? "high" :
@@ -229,44 +205,41 @@ export async function GET() {
 
     const required_weekly_ar = avgOverheadCash + current.payroll_outflow + current.ap_paydown;
 
-    // ── 6. Per-account overhead breakdown ────────────────────────────────────
+    // ── 6. Per-account overhead breakdown from weekly_balances ───────────────
     let fixed_overhead_accounts: FixedOverheadAccount[] = [];
 
     if (overheadDataWeeks >= 2 && overheadWeeks.length > 0) {
-      const cutoffDate    = overheadWeeks[overheadWeeks.length - 1].week_ending;
-      const latestOhWeek  = overheadWeeks[0].week_ending;
+      const cutoffDate   = overheadWeeks[overheadWeeks.length - 1].week_ending;
+      const latestOhWeek = overheadWeeks[0].week_ending;
 
-      try {
-        const acctRows = await sql`
-          SELECT
-            g.account_no,
-            g.description,
-            AVG(wos.net_activity)::numeric                                                             AS trailing_avg,
-            MAX(CASE WHEN wos.week_ending = ${latestOhWeek}::date
-                     THEN wos.net_activity END)::numeric                                               AS last_week_amt
-          FROM weekly_overhead_spend wos
-          JOIN gl_accounts g ON g.id = wos.gl_account_id
-          WHERE wos.division = '99'
-            AND g.is_non_cash = FALSE
-            AND wos.week_ending >= ${cutoffDate}::date
-          GROUP BY g.account_no, g.description
-          HAVING AVG(wos.net_activity) > 0
-          ORDER BY AVG(wos.net_activity) DESC
-          LIMIT 10
-        `;
-        fixed_overhead_accounts = acctRows.map((r) => {
-          const avg  = n(r.trailing_avg);
-          const last = n(r.last_week_amt);
-          return {
-            account_no:       Number(r.account_no),
-            description:      String(r.description),
-            trailing_4wk_avg: avg,
-            variance_pct:     avg > 0 ? ((last - avg) / avg) * 100 : 0,
-          };
-        });
-      } catch {
-        // is_non_cash not available — skip per-account breakdown
-      }
+      const acctRows = await sql`
+        SELECT
+          g.account_no,
+          g.division,
+          g.description,
+          AVG(wb.period_debit - wb.period_credit)::numeric AS trailing_avg,
+          MAX(CASE WHEN wb.week_ending = ${latestOhWeek}::date
+                   THEN wb.period_debit - wb.period_credit END)::numeric AS last_week_amt
+        FROM weekly_balances wb
+        JOIN gl_accounts g ON g.id = wb.gl_account_id
+        JOIN categories  c ON c.id = g.category_id
+        WHERE c.name = 'Overhead (Div 99)'
+          AND wb.week_ending >= ${cutoffDate}::date
+        GROUP BY g.account_no, g.division, g.description
+        HAVING AVG(wb.period_debit - wb.period_credit) > 0
+        ORDER BY AVG(wb.period_debit - wb.period_credit) DESC
+        LIMIT 10
+      `;
+      fixed_overhead_accounts = acctRows.map((r) => {
+        const avg  = n(r.trailing_avg);
+        const last = n(r.last_week_amt);
+        return {
+          account_no:       Number(r.account_no),
+          description:      String(r.description),
+          trailing_4wk_avg: avg,
+          variance_pct:     avg > 0 ? ((last - avg) / avg) * 100 : 0,
+        };
+      });
     }
 
     // ── 7. Response ───────────────────────────────────────────────────────────
