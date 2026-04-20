@@ -163,22 +163,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── 3. Load prior end_balances for all balance-sheet accounts ─────────────
-    const priorMap = new Map<number, number>(); // gl_account_id → prior end_balance
+    // ── 3. Load prior end_balances + existing beg_balances ───────────────────
+    // Two bulk queries instead of N+1 per-account selects.
     const bsIds = Array.from(acctMap.values())
       .filter((a) => !a.is_pl_flow)
       .map((a) => a.id);
 
-    for (const gl_account_id of bsIds) {
-      const rows = await sql`
-        SELECT end_balance
+    const priorMap       = new Map<number, number>(); // gl_account_id → prior end_balance
+    const existingBegMap = new Map<number, number>(); // gl_account_id → this week's beg_balance
+
+    if (bsIds.length > 0) {
+      // Most recent prior end_balance per account (one query instead of N)
+      const priorRows = await sql`
+        SELECT DISTINCT ON (gl_account_id)
+          gl_account_id, end_balance::numeric
         FROM weekly_balances
-        WHERE gl_account_id = ${gl_account_id}
+        WHERE gl_account_id = ANY(${bsIds})
           AND week_ending < ${week_ending}
-        ORDER BY week_ending DESC
-        LIMIT 1
+        ORDER BY gl_account_id, week_ending DESC
       `;
-      if (rows.length > 0) priorMap.set(gl_account_id, n(rows[0].end_balance));
+      for (const r of priorRows) {
+        priorMap.set(Number(r.gl_account_id), n(r.end_balance));
+      }
+
+      // Existing beg_balances for this exact week — used when no prior week
+      // exists to preserve manually-seeded opening balances.
+      const existingRows = await sql`
+        SELECT gl_account_id, beg_balance::numeric
+        FROM weekly_balances
+        WHERE gl_account_id = ANY(${bsIds})
+          AND week_ending = ${week_ending}
+      `;
+      for (const r of existingRows) {
+        existingBegMap.set(Number(r.gl_account_id), n(r.beg_balance));
+      }
     }
 
     // ── 4. Compute inserts for all 143 accounts ────────────────────────────────
@@ -201,7 +219,11 @@ export async function POST(req: NextRequest) {
       let end_balance = 0;
 
       if (!acct.is_pl_flow) {
-        beg_balance = priorMap.get(acct.id) ?? 0;
+        // Prior week exists → carry its end_balance forward as beg.
+        // No prior week → preserve any manually-seeded opening beg_balance, else 0.
+        beg_balance = priorMap.has(acct.id)
+          ? priorMap.get(acct.id)!
+          : (existingBegMap.get(acct.id) ?? 0);
         const net = acct.normal_balance === "debit"
           ? period_debit - period_credit
           : period_credit - period_debit;
@@ -213,18 +235,23 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 5. Write to DB (transaction) ──────────────────────────────────────────
-    await sql.transaction((txSql) => [
-      // Idempotent: clear this week then reinsert
-      txSql`DELETE FROM weekly_balances WHERE week_ending = ${week_ending}`,
-      ...inserts.map((ins) => txSql`
+    // ON CONFLICT preserves beg_balance from any existing row (e.g. manual
+    // opening balance entries) — only the period activity and derived end_balance
+    // are updated on reimport.
+    await sql.transaction((txSql) =>
+      inserts.map((ins) => txSql`
         INSERT INTO weekly_balances
           (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
         VALUES
           (${week_ending}, ${ins.gl_account_id},
            ${ins.beg_balance}, ${ins.end_balance},
            ${ins.period_debit}, ${ins.period_credit})
-      `),
-    ]);
+        ON CONFLICT (week_ending, gl_account_id) DO UPDATE SET
+          period_debit  = EXCLUDED.period_debit,
+          period_credit = EXCLUDED.period_credit,
+          end_balance   = EXCLUDED.end_balance
+      `)
+    );
 
     // ── 6. Compute category totals for response ────────────────────────────────
     const catRows = await sql`
