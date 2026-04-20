@@ -241,6 +241,10 @@ export default function KPICards({
   // Cumulative backlog (all-time bids_won_value)
   const backlog = weeks.reduce((s, w) => s + w.bids_won_value, 0);
 
+  const prev = weeks.length >= 2 ? weeks[weeks.length - 2] : null;
+  const payrollFieldChange = prev !== null ? latest.payroll_field - prev.payroll_field : null;
+  const overheadChange     = prev !== null ? latest.overhead      - prev.overhead      : null;
+
   const cards = [
     {
       label: "Cash on Hand",
@@ -264,31 +268,25 @@ export default function KPICards({
       inverseLogic: true,
     },
     {
-      label: "Net Position",
-      value: fmtMoneyShort(latest.net_position),
-      change:
-        latest.cash_change !== null
-          ? latest.net_position -
-            (latest.cash - (latest.cash_change ?? 0)) +
-            (latest.ap_change ?? 0) +
-            (latest.payroll_change ?? 0)
-          : null,
-      accentColor: COLORS.net,
-      inverseLogic: false,
+      label: "Payroll Liabilities",
+      value: fmtMoneyShort(latest.payroll),
+      change: latest.payroll_change,
+      accentColor: COLORS.payroll,
+      inverseLogic: true,
     },
     {
-      label: "Backlog (Cumulative)",
-      value: fmtMoneyShort(backlog),
-      change: null as number | null,
-      accentColor: COLORS.backlog,
-      inverseLogic: false,
+      label: "Payroll Burn (Field)",
+      value: fmtMoneyShort(latest.payroll_field),
+      change: payrollFieldChange,
+      accentColor: "#14B8A6",
+      inverseLogic: true,
     },
     {
-      label: "Win Rate (4-wk)",
-      value: winRate !== null ? `${winRate.toFixed(1)}%` : "N/A",
-      change: null as number | null,
-      accentColor: COLORS.ar,
-      inverseLogic: false,
+      label: "Overhead Burn",
+      value: fmtMoneyShort(latest.overhead),
+      change: overheadChange,
+      accentColor: "#7B3FA0",
+      inverseLogic: true,
     },
   ];
 

@@ -9,6 +9,8 @@ export interface WeekMetric {
   ar: number;
   ap: number;
   payroll: number;
+  payroll_field: number;
+  overhead: number;
   net_position: number;
   cash_change: number | null;
   ar_change: number | null;
@@ -66,7 +68,10 @@ export async function GET() {
         SELECT
           wb.week_ending,
           c.name AS cat,
-          SUM(wb.end_balance) AS total
+          CASE WHEN bool_or(g.is_pl_flow)
+               THEN SUM(wb.period_debit - wb.period_credit)
+               ELSE SUM(wb.end_balance)
+          END AS total
         FROM weekly_balances wb
         JOIN  gl_accounts g ON g.id = wb.gl_account_id
         LEFT JOIN categories c ON c.id = g.category_id
@@ -78,6 +83,8 @@ export async function GET() {
         COALESCE(MAX(CASE WHEN ct.cat = 'Who Owes Us'         THEN ct.total END), 0) AS ar,
         COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe'          THEN ct.total END), 0) AS ap,
         COALESCE(MAX(CASE WHEN ct.cat = 'Payroll Liabilities' THEN ct.total END), 0) AS payroll,
+        COALESCE(MAX(CASE WHEN ct.cat = 'Payroll (Field)'     THEN ct.total END), 0) AS payroll_field,
+        COALESCE(MAX(CASE WHEN ct.cat = 'Overhead (Div 99)'   THEN ct.total END), 0) AS overhead,
         COALESCE(ba.bids_submitted_count, 0) AS bids_submitted_count,
         COALESCE(ba.bids_submitted_value, 0) AS bids_submitted_value,
         COALESCE(ba.bids_won_count,       0) AS bids_won_count,
@@ -94,10 +101,12 @@ export async function GET() {
 
     // ── 2. Compute WoW deltas in application layer ────────────────────────────
     const weeksBase = rawWeeks.map((row, i) => {
-      const cash    = n(row.cash);
-      const ar      = n(row.ar);
-      const ap      = n(row.ap);
-      const payroll = n(row.payroll);
+      const cash          = n(row.cash);
+      const ar            = n(row.ar);
+      const ap            = n(row.ap);
+      const payroll       = n(row.payroll);
+      const payroll_field = n(row.payroll_field);
+      const overhead      = n(row.overhead);
 
       let cash_change: number | null    = null;
       let ar_change: number | null      = null;
@@ -128,6 +137,8 @@ export async function GET() {
         ar,
         ap,
         payroll,
+        payroll_field,
+        overhead,
         net_position: cash - ap - payroll,
         cash_change,
         ar_change,
