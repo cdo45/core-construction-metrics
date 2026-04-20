@@ -18,6 +18,8 @@ export interface BaselineRates {
   insurance_payment_amount: number;
   insurance_payment_frequency: number;
   historical_weeks_count: number;
+  avg_overhead_cash_burn: number;
+  avg_overhead_non_cash: number;
 }
 
 export interface ProjectedWeek {
@@ -195,7 +197,7 @@ function runScenario(
 
     // ── Cash ─────────────────────────────────────────────────────────────────
 
-    const cash_out  = ap_payments + payroll_remit + insurance_payment;
+    const cash_out  = ap_payments + payroll_remit + insurance_payment + rates.avg_overhead_cash_burn;
     const cash_in   = ar_collections;
     const new_cash  = cash + cash_in - cash_out;
     const cash_change = new_cash - cash;
@@ -412,6 +414,51 @@ export async function GET() {
         ? avgWeeklyArCollection / avgAR
         : 0.1; // fallback 10%
 
+    // ── 3b. Trailing 4-week overhead averages ────────────────────────────────
+    let avgOverheadCashBurn = 0;
+    let avgOverheadNonCash  = 0;
+    let latestOverheadCash  = 0;
+
+    try {
+      const ohRows = await sql`
+        SELECT
+          wos.week_ending::text,
+          COALESCE(SUM(CASE WHEN g.is_non_cash = FALSE THEN wos.net_activity ELSE 0 END), 0)::numeric AS cash_oh,
+          COALESCE(SUM(CASE WHEN g.is_non_cash = TRUE  THEN wos.net_activity ELSE 0 END), 0)::numeric AS non_cash_oh
+        FROM weekly_overhead_spend wos
+        JOIN gl_accounts g ON g.id = wos.gl_account_id
+        WHERE wos.division = '99'
+        GROUP BY wos.week_ending
+        ORDER BY wos.week_ending DESC
+        LIMIT 4
+      `;
+      if (ohRows.length > 0) {
+        avgOverheadCashBurn = ohRows.reduce((s, r) => s + n(r.cash_oh),     0) / ohRows.length;
+        avgOverheadNonCash  = ohRows.reduce((s, r) => s + n(r.non_cash_oh), 0) / ohRows.length;
+        latestOverheadCash  = n(ohRows[0].cash_oh);
+      }
+    } catch {
+      // is_non_cash column may not exist yet — try without it
+      try {
+        const ohRows = await sql`
+          SELECT
+            week_ending::text,
+            COALESCE(SUM(net_activity), 0)::numeric AS cash_oh
+          FROM weekly_overhead_spend
+          WHERE division = '99'
+          GROUP BY week_ending
+          ORDER BY week_ending DESC
+          LIMIT 4
+        `;
+        if (ohRows.length > 0) {
+          avgOverheadCashBurn = ohRows.reduce((s, r) => s + n(r.cash_oh), 0) / ohRows.length;
+          latestOverheadCash  = n(ohRows[0].cash_oh);
+        }
+      } catch {
+        // no overhead data available
+      }
+    }
+
     const rates: BaselineRates = {
       avg_weekly_cash_change:          avg(cashChanges),
       avg_weekly_ar_billing:           avg(arIncreases) || 0,
@@ -427,6 +474,8 @@ export async function GET() {
       insurance_payment_amount:        insurancePaymentAmount,
       insurance_payment_frequency:     insurancePaymentFrequency,
       historical_weeks_count:          weeks.length,
+      avg_overhead_cash_burn:          avgOverheadCashBurn,
+      avg_overhead_non_cash:           avgOverheadNonCash,
     };
 
     const latest = weeks[weeks.length - 1];
@@ -519,6 +568,13 @@ export async function GET() {
         );
       }
     });
+
+    // Overhead acceleration warning
+    if (avgOverheadCashBurn > 0 && latestOverheadCash > avgOverheadCashBurn * 1.2) {
+      action_items.push(
+        `⚠ Overhead spending accelerating — latest week ${fmtMoney(latestOverheadCash)} vs ${fmtMoney(avgOverheadCashBurn)} trailing avg (${((latestOverheadCash / avgOverheadCashBurn - 1) * 100).toFixed(0)}% above average).`
+      );
+    }
 
     // Week +4 net position comparison
     const idealW4    = ideal.weeks[3];

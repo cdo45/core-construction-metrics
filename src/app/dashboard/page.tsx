@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MetricsResponse } from "@/app/api/metrics/route";
 import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards";
+import type { CashBurnData } from "@/app/api/metrics/cash-burn/route";
 import WeeklyCharts from "@/components/dashboard/WeeklyCharts";
 import BacklogCharts from "@/components/dashboard/BacklogCharts";
 import MonthlySection from "@/components/dashboard/MonthlySection";
@@ -70,6 +71,7 @@ export default function DashboardPage() {
   const [projData,   setProjData]   = useState<ProjectionsData | null>(null);
   const [projError,  setProjError]  = useState("");
   const [projLoading, setProjLoading] = useState(true);
+  const [burnData,   setBurnData]   = useState<CashBurnData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -84,6 +86,16 @@ export default function DashboardPage() {
       .then(setData)
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
+  }
+
+  function fetchBurn() {
+    fetch("/api/metrics/cash-burn")
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<CashBurnData>;
+      })
+      .then((d) => { if (d) setBurnData(d); })
+      .catch(() => {}); // silent failure — column may not exist yet
   }
 
   function fetchProjections() {
@@ -108,6 +120,7 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchData();
     fetchProjections();
+    fetchBurn();
   }, []);
 
   const weeks  = data?.weeks  ?? [];
@@ -180,7 +193,7 @@ export default function DashboardPage() {
 
         {/* 1 — KPI Cards */}
         <Section title="Key Metrics">
-          {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
+          {loading ? <KPISkeleton /> : <KPICards weeks={weeks} cashBurn={burnData ?? undefined} />}
         </Section>
 
         {/* 2 — Weekly Trends */}
