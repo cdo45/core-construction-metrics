@@ -53,7 +53,7 @@ function buildNarrative(data: WeeklyReportData): string {
 
   const cash    = catByName("Cash on Hand");
   const ar      = catByName("Who Owes Us");
-  const ap      = catByName("Who We Owe");
+  const ap      = catByName("Who We Owe (Current)");
   const payroll = catByName("Payroll Liabilities");
 
   const hasPrior = !!prior_week_ending;
@@ -157,7 +157,9 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
 
   // For "favorable" coloring: cash up = good; AR up = good; AP up = bad; payroll up = bad
   const isCostCategory =
-    cat.name === "Who We Owe" || cat.name === "Payroll Liabilities";
+    cat.name === "Who We Owe (Current)" ||
+    cat.name === "Who We Owe (Long-Term)" ||
+    cat.name === "Payroll Liabilities";
 
   function changeColor(change: number): string {
     if (change === 0) return "text-gray-400";

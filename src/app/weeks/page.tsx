@@ -171,7 +171,7 @@ export default function WeeksPage() {
                   <th className="table-th">Week Ending</th>
                   <th className="table-th text-right">Cash on Hand</th>
                   <th className="table-th text-right">Who Owes Us</th>
-                  <th className="table-th text-right">Who We Owe</th>
+                  <th className="table-th text-right">Who We Owe (Current)</th>
                   <th className="table-th text-right">Payroll</th>
                   <th className="table-th text-right">Bids Out</th>
                   <th className="table-th text-right">Bids Won</th>

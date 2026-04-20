@@ -264,7 +264,7 @@ export async function GET() {
         w.week_ending::text,
         COALESCE(MAX(CASE WHEN ct.cat = 'Cash on Hand'        THEN ct.total END), 0) AS cash,
         COALESCE(MAX(CASE WHEN ct.cat = 'Who Owes Us'         THEN ct.total END), 0) AS ar,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe'          THEN ct.total END), 0) AS ap,
+        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe (Current)' THEN ct.total END), 0) AS ap,
         COALESCE(MAX(CASE WHEN ct.cat = 'Payroll Liabilities' THEN ct.total END), 0) AS payroll
       FROM (SELECT DISTINCT week_ending FROM weekly_balances) w
       LEFT JOIN cat_totals ct ON ct.week_ending = w.week_ending

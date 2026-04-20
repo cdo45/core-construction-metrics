@@ -74,17 +74,18 @@ function buildRatios(
   cash: number,
   ar: number,
   ap: number,
+  lt_debt: number,
   payroll: number
 ): ReportRatios {
-  const liabilities = ap + payroll;
+  const currentLiabilities = ap + payroll;
   const assets = cash + ar;
   return {
     ar_to_ap:            safeDivide(ar, ap),
-    cash_coverage_weeks: safeDivide(cash, ap / 52),   // weeks of AP coverage
-    payroll_coverage:    safeDivide(cash, payroll / 52), // weeks of payroll runway
-    net_liquidity:       cash - ap - payroll,
-    current_ratio:       safeDivide(assets, liabilities),
-    quick_ratio:         safeDivide(cash, liabilities),
+    cash_coverage_weeks: safeDivide(cash, ap / 52),
+    payroll_coverage:    safeDivide(cash, payroll / 52),
+    net_liquidity:       cash - ap - lt_debt - payroll,
+    current_ratio:       safeDivide(assets, currentLiabilities),
+    quick_ratio:         safeDivide(cash, currentLiabilities),
   };
 }
 
@@ -237,36 +238,42 @@ export async function GET(req: NextRequest) {
 
     const cash    = catByName("Cash on Hand");
     const ar      = catByName("Who Owes Us");
-    const ap      = catByName("Who We Owe");
+    const ap      = catByName("Who We Owe (Current)");
+    const lt_debt = catByName("Who We Owe (Long-Term)");
     const payroll = catByName("Payroll Liabilities");
 
-    const ratios = buildRatios(cash, ar, ap, payroll);
+    const ratios = buildRatios(cash, ar, ap, lt_debt, payroll);
 
     let prior_ratios: ReportRatios | null = null;
     if (priorWeekEnding) {
       const pCash    = priorCatTotal("Cash on Hand");
       const pAR      = priorCatTotal("Who Owes Us");
-      const pAP      = priorCatTotal("Who We Owe");
+      const pAP      = priorCatTotal("Who We Owe (Current)");
+      const pLtDebt  = priorCatTotal("Who We Owe (Long-Term)");
       const pPayroll = priorCatTotal("Payroll Liabilities");
-      prior_ratios = buildRatios(pCash, pAR, pAP, pPayroll);
+      prior_ratios = buildRatios(pCash, pAR, pAP, pLtDebt, pPayroll);
     }
 
     // ── 5. Overhead (Div 99) summary — net activity this week vs prior ──────
     const currentOverhead = await sql`
-      SELECT COALESCE(SUM(net_activity), 0) AS total_net
-      FROM weekly_overhead_spend
-      WHERE week_ending = ${weekEnding}
-        AND division    = '99'
+      SELECT COALESCE(SUM(wb.period_debit - wb.period_credit), 0) AS total_net
+      FROM weekly_balances wb
+      JOIN gl_accounts g ON g.id = wb.gl_account_id
+      JOIN categories  c ON c.id = g.category_id
+      WHERE c.name = 'Overhead (Div 99)'
+        AND wb.week_ending = ${weekEnding}
     `;
     const currentOverheadNet = n(currentOverhead[0]?.total_net);
 
     let priorOverheadNet = 0;
     if (priorWeekEnding) {
       const priorOverhead = await sql`
-        SELECT COALESCE(SUM(net_activity), 0) AS total_net
-        FROM weekly_overhead_spend
-        WHERE week_ending = ${priorWeekEnding}
-          AND division    = '99'
+        SELECT COALESCE(SUM(wb.period_debit - wb.period_credit), 0) AS total_net
+        FROM weekly_balances wb
+        JOIN gl_accounts g ON g.id = wb.gl_account_id
+        JOIN categories  c ON c.id = g.category_id
+        WHERE c.name = 'Overhead (Div 99)'
+          AND wb.week_ending = ${priorWeekEnding}
       `;
       priorOverheadNet = n(priorOverhead[0]?.total_net);
     }
