@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   type ParsedTransaction,
@@ -39,6 +39,69 @@ function fmtMoney(n: number): string {
   }).format(n);
 }
 
+// ─── Accounts panel ───────────────────────────────────────────────────────────
+
+const COLLAPSE_THRESHOLD = 20;
+
+function AccountsPanel({
+  inScope,
+  outOfScope,
+  loaded,
+}: {
+  inScope:    number[];
+  outOfScope: number[];
+  loaded:     boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!loaded) {
+    return (
+      <div>
+        <p className="text-gray-500 mb-0.5">Accounts</p>
+        <p className="font-semibold text-gray-900 font-mono leading-relaxed break-words">
+          {inScope.join(", ")}
+        </p>
+      </div>
+    );
+  }
+
+  const visibleOut = expanded ? outOfScope : outOfScope.slice(0, COLLAPSE_THRESHOLD);
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="text-gray-500 mb-0.5">Accounts — will import ({inScope.length})</p>
+        {inScope.length > 0 ? (
+          <p className="font-semibold text-gray-900 font-mono leading-relaxed break-words">
+            {inScope.join(", ")}
+          </p>
+        ) : (
+          <p className="text-gray-400 italic">None matched</p>
+        )}
+      </div>
+      {outOfScope.length > 0 && (
+        <div>
+          <p className="text-gray-400 mb-0.5">Out of scope — will skip ({outOfScope.length})</p>
+          <p className="text-gray-400 font-mono text-[11px] leading-relaxed break-words">
+            {visibleOut.join(", ")}
+            {!expanded && outOfScope.length > COLLAPSE_THRESHOLD && (
+              <>
+                {"… "}
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="text-[#E67E22] underline"
+                >
+                  show all {outOfScope.length}
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -59,10 +122,29 @@ export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Pr
   const [importResult,     setImportResult]     = useState<OverheadImportResult | null>(null);
   const [importError,      setImportError]      = useState("");
   const [confirmOverwrite, setConfirmOverwrite] = useState<OverwriteInfo | null>(null);
+  const [ohNos,            setOhNos]            = useState<Set<number>>(new Set());
+
+  // Fetch the overhead account list once on mount for scope-aware preview.
+  useEffect(() => {
+    fetch("/api/gl-accounts/overhead-scope")
+      .then(async (r) => {
+        if (!r.ok) return;
+        const d = await r.json() as { account_nos: number[] };
+        setOhNos(new Set(d.account_nos));
+      })
+      .catch(() => {});
+  }, []);
 
   const uniqueAccounts = Array.from(
     new Set(transactions.map((t) => t.account_no)),
   ).sort((a, b) => a - b);
+
+  const ohLoaded           = ohNos.size > 0;
+  const inScopeAccounts    = ohLoaded ? uniqueAccounts.filter((a) =>  ohNos.has(a)) : uniqueAccounts;
+  const outOfScopeAccounts = ohLoaded ? uniqueAccounts.filter((a) => !ohNos.has(a)) : [];
+  const inScopeRows        = ohLoaded
+    ? transactions.filter((t) => ohNos.has(t.account_no)).length
+    : transactions.length;
 
   // ── File handling ─────────────────────────────────────────────────────────
 
@@ -358,7 +440,17 @@ export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Pr
         <div>
           <h2 className="text-sm font-semibold text-gray-900">DIV 99 Overhead — CSV Preview</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {transactions.length} transactions · {uniqueAccounts.length} accounts found
+            {transactions.length.toLocaleString()} transactions ·{" "}
+            {ohLoaded ? (
+              <>
+                {inScopeAccounts.length} in-scope accounts
+                {outOfScopeAccounts.length > 0 && (
+                  <span className="text-amber-600"> · {outOfScopeAccounts.length} out-of-scope (will skip)</span>
+                )}
+              </>
+            ) : (
+              <>{uniqueAccounts.length} accounts found</>
+            )}
             {sourceFile ? ` · ${sourceFile}` : ""}
           </p>
         </div>
@@ -383,7 +475,7 @@ export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Pr
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                 </svg>
-                Import {transactions.length} rows
+                Import {inScopeRows.toLocaleString()} rows
               </>
             )}
           </button>
@@ -409,26 +501,29 @@ export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Pr
             <span>Skipped (blanks): <span className="font-medium text-gray-800">{filterStats.skipped_blank_spacers}</span></span>
             <span>Skipped (bad acct): <span className="font-medium text-gray-800">{filterStats.skipped_bad_account}</span></span>
             <span className="text-[#E67E22] font-medium">
-              Will import: {transactions.length} rows totaling {fmtMoney(netActivity)} net
+              Will import: {inScopeRows.toLocaleString()} rows{ohLoaded && outOfScopeAccounts.length > 0 ? ` (${(transactions.length - inScopeRows).toLocaleString()} out-of-scope skipped)` : ""} · {fmtMoney(netActivity)} net
             </span>
           </div>
         </div>
       )}
 
       {/* Totals row */}
-      <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 grid grid-cols-3 gap-4 text-xs">
-        <div>
-          <p className="text-gray-500">Total Debits</p>
-          <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalDebits)}</p>
+      <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 text-xs">
+        <div className="grid grid-cols-2 gap-4 mb-3">
+          <div>
+            <p className="text-gray-500">Total Debits</p>
+            <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalDebits)}</p>
+          </div>
+          <div>
+            <p className="text-gray-500">Total Credits</p>
+            <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalCredits)}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-gray-500">Total Credits</p>
-          <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalCredits)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Accounts</p>
-          <p className="font-semibold text-gray-900">{uniqueAccounts.join(", ")}</p>
-        </div>
+        <AccountsPanel
+          inScope={inScopeAccounts}
+          outOfScope={outOfScopeAccounts}
+          loaded={ohLoaded}
+        />
       </div>
 
       {/* Transaction preview table */}

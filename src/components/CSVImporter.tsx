@@ -36,6 +36,69 @@ function fmtMoney(n: number): string {
   }).format(n);
 }
 
+// ─── Accounts panel ───────────────────────────────────────────────────────────
+
+const COLLAPSE_THRESHOLD = 20;
+
+function AccountsPanel({
+  inScope,
+  outOfScope,
+  loaded,
+}: {
+  inScope:    number[];
+  outOfScope: number[];
+  loaded:     boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!loaded) {
+    return (
+      <div>
+        <p className="text-gray-500 mb-0.5">Accounts</p>
+        <p className="font-semibold text-gray-900 font-mono leading-relaxed break-words">
+          {inScope.join(", ")}
+        </p>
+      </div>
+    );
+  }
+
+  const visibleOut = expanded ? outOfScope : outOfScope.slice(0, COLLAPSE_THRESHOLD);
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="text-gray-500 mb-0.5">Accounts — will import ({inScope.length})</p>
+        {inScope.length > 0 ? (
+          <p className="font-semibold text-gray-900 font-mono leading-relaxed break-words">
+            {inScope.join(", ")}
+          </p>
+        ) : (
+          <p className="text-gray-400 italic">None matched</p>
+        )}
+      </div>
+      {outOfScope.length > 0 && (
+        <div>
+          <p className="text-gray-400 mb-0.5">Out of scope — will skip ({outOfScope.length})</p>
+          <p className="text-gray-400 font-mono text-[11px] leading-relaxed break-words">
+            {visibleOut.join(", ")}
+            {!expanded && outOfScope.length > COLLAPSE_THRESHOLD && (
+              <>
+                {"… "}
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="text-[#1B2A4A] underline"
+                >
+                  show all {outOfScope.length}
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -75,10 +138,11 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
   ).sort((a, b) => a - b);
 
   // Scope breakdown (only meaningful once bsNos is populated)
-  const bsLoaded        = bsNos.size > 0;
-  const inScopeAccounts = bsLoaded ? uniqueAccounts.filter((a) => bsNos.has(a)) : uniqueAccounts;
-  const outOfScopeCount = bsLoaded ? uniqueAccounts.length - inScopeAccounts.length : 0;
-  const inScopeRows     = bsLoaded
+  const bsLoaded           = bsNos.size > 0;
+  const inScopeAccounts    = bsLoaded ? uniqueAccounts.filter((a) =>  bsNos.has(a)) : uniqueAccounts;
+  const outOfScopeAccounts = bsLoaded ? uniqueAccounts.filter((a) => !bsNos.has(a)) : [];
+  const outOfScopeCount    = outOfScopeAccounts.length;
+  const inScopeRows        = bsLoaded
     ? transactions.filter((t) => bsNos.has(t.account_no)).length
     : transactions.length;
 
@@ -420,19 +484,22 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
       )}
 
       {/* Totals row */}
-      <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 grid grid-cols-3 gap-4 text-xs">
-        <div>
-          <p className="text-gray-500">Total Debits</p>
-          <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalDebits)}</p>
+      <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 text-xs">
+        <div className="grid grid-cols-2 gap-4 mb-3">
+          <div>
+            <p className="text-gray-500">Total Debits</p>
+            <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalDebits)}</p>
+          </div>
+          <div>
+            <p className="text-gray-500">Total Credits</p>
+            <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalCredits)}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-gray-500">Total Credits</p>
-          <p className="font-semibold text-gray-900 tabular-nums">{fmtMoney(totalCredits)}</p>
-        </div>
-        <div>
-          <p className="text-gray-500">Accounts</p>
-          <p className="font-semibold text-gray-900">{uniqueAccounts.join(", ")}</p>
-        </div>
+        <AccountsPanel
+          inScope={inScopeAccounts}
+          outOfScope={outOfScopeAccounts}
+          loaded={bsLoaded}
+        />
       </div>
 
       {/* Transaction preview table */}
