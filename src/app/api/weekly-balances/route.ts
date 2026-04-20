@@ -45,9 +45,13 @@ export async function GET(req: NextRequest) {
           wb.gl_account_id,
           wb.beg_balance,
           wb.end_balance,
+          wb.period_debit,
+          wb.period_credit,
           g.account_no,
+          g.division,
           g.description,
           g.normal_balance,
+          g.is_pl_flow,
           g.category_id,
           c.name  AS category_name,
           c.color AS category_color,
@@ -69,9 +73,13 @@ export async function GET(req: NextRequest) {
         wb.gl_account_id,
         wb.beg_balance,
         wb.end_balance,
+        wb.period_debit,
+        wb.period_credit,
         g.account_no,
+        g.division,
         g.description,
         g.normal_balance,
+        g.is_pl_flow,
         g.category_id,
         c.name  AS category_name,
         c.color AS category_color,
@@ -95,9 +103,13 @@ export async function GET(req: NextRequest) {
         g.id AS gl_account_id,
         0::numeric(15,2) AS beg_balance,
         0::numeric(15,2) AS end_balance,
+        0::numeric(15,2) AS period_debit,
+        0::numeric(15,2) AS period_credit,
         g.account_no,
+        g.division,
         g.description,
         g.normal_balance,
+        g.is_pl_flow,
         g.category_id,
         c.name  AS category_name,
         c.color AS category_color,
@@ -126,7 +138,13 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { week_ending, balances } = body as {
       week_ending: string;
-      balances: { gl_account_id: number; beg_balance: number; end_balance: number }[];
+      balances: {
+        gl_account_id: number;
+        beg_balance:   number;
+        end_balance:   number;
+        period_debit?:  number;
+        period_credit?: number;
+      }[];
     };
 
     if (!week_ending) {
@@ -137,29 +155,34 @@ export async function POST(req: NextRequest) {
     }
 
     for (const row of balances) {
-      // Explicitly parse as float — guards against any accidental parseInt
-      // coercion that would silently truncate cents (e.g. 9987.74 → 9987).
-      const begBalance = parseFloat(String(row.beg_balance));
-      const endBalance = parseFloat(String(row.end_balance));
+      const begBalance   = parseFloat(String(row.beg_balance));
+      const endBalance   = parseFloat(String(row.end_balance));
+      const periodDebit  = parseFloat(String(row.period_debit  ?? 0));
+      const periodCredit = parseFloat(String(row.period_credit ?? 0));
 
       if (!isFinite(begBalance) || !isFinite(endBalance)) {
         return NextResponse.json(
           { error: `Non-numeric balance for account ${row.gl_account_id}` },
-          { status: 400 }
+          { status: 400 },
         );
       }
 
       await sql`
-        INSERT INTO weekly_balances (week_ending, gl_account_id, beg_balance, end_balance)
+        INSERT INTO weekly_balances
+          (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
         VALUES (
           ${week_ending}::date,
           ${row.gl_account_id},
           ${begBalance},
-          ${endBalance}
+          ${endBalance},
+          ${isFinite(periodDebit)  ? periodDebit  : 0},
+          ${isFinite(periodCredit) ? periodCredit : 0}
         )
         ON CONFLICT (week_ending, gl_account_id) DO UPDATE
-          SET beg_balance = EXCLUDED.beg_balance,
-              end_balance = EXCLUDED.end_balance
+          SET beg_balance   = EXCLUDED.beg_balance,
+              end_balance   = EXCLUDED.end_balance,
+              period_debit  = EXCLUDED.period_debit,
+              period_credit = EXCLUDED.period_credit
       `;
     }
 
