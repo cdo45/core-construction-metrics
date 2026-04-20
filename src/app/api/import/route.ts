@@ -118,11 +118,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // ── a. Load all active GL accounts ──────────────────────────────────────
+    // ── a. Load balance-sheet GL accounts only ──────────────────────────────
+    // Overhead accounts (Overhead Div 99) have their own importer; exclude them
+    // here so stray overhead rows in a Full GL export are silently skipped.
     const accountRows = await sql`
-      SELECT id, account_no, normal_balance
-      FROM gl_accounts
-      WHERE is_active = TRUE
+      SELECT ga.id, ga.account_no, ga.normal_balance
+      FROM gl_accounts ga
+      JOIN categories c ON c.id = ga.category_id
+      WHERE ga.is_active = TRUE
+        AND c.name IN (
+          'Cash on Hand',
+          'Who Owes Us',
+          'Who We Owe',
+          'Payroll Liabilities'
+        )
     `;
 
     const accountMap = new Map<
@@ -178,7 +187,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── d. Load prior end_balances for ALL active accounts (pre-transaction) ─
+    // ── d. Load prior end_balances for all balance-sheet accounts ────────────
     const allActiveIds = Array.from(accountMap.values()).map((a) => a.id);
     const priorMap = new Map<number, number>();
 
