@@ -71,11 +71,12 @@ interface TrxSummary {
   account_no: number;
   description: string;
   normal_balance: "debit" | "credit";
-  beg_balance: number;
-  end_balance: number;
+  beg_balance: number | null;
+  end_balance: number | null;
   total_debits: number;
   total_credits: number;
   net_activity: number;
+  account_type?: "overhead" | "balance_sheet";
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -203,39 +204,58 @@ function TransactionModal({
           <div className="px-5 py-8 text-center text-sm text-red-600">{error}</div>
         ) : (
           <>
-            {/* Balance summary */}
+            {/* Balance / activity summary */}
             {summary && (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 px-5 py-4 border-b border-gray-200 flex-shrink-0">
-                {[
-                  { label: "Beg Balance", value: fmtMoney(summary.beg_balance) },
-                  { label: "Total Debits", value: fmtMoney(summary.total_debits) },
-                  { label: "Total Credits", value: fmtMoney(summary.total_credits) },
-                  {
-                    label: "Net Activity",
-                    value: fmtMoney(summary.net_activity),
-                    colored: true,
-                    positive: summary.net_activity >= 0,
-                  },
-                  { label: "End Balance", value: fmtMoney(summary.end_balance), bold: true },
-                ].map((item) => (
-                  <div key={item.label}>
-                    <p className="text-xs text-gray-500">{item.label}</p>
-                    <p
-                      className={`text-sm font-semibold tabular-nums ${
-                        item.bold
-                          ? "text-gray-900"
-                          : item.colored
-                          ? item.positive
-                            ? "text-green-700"
-                            : "text-red-600"
-                          : "text-gray-700"
-                      }`}
-                    >
-                      {item.value}
+              summary.account_type === "overhead" ? (
+                <div className="grid grid-cols-3 gap-4 px-5 py-4 border-b border-gray-200 flex-shrink-0">
+                  <div>
+                    <p className="text-xs text-gray-500">Total Debits</p>
+                    <p className="text-sm font-semibold tabular-nums text-gray-700">{fmtMoney(summary.total_debits)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Total Credits</p>
+                    <p className="text-sm font-semibold tabular-nums text-gray-700">{fmtMoney(summary.total_credits)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Period Activity</p>
+                    <p className={`text-sm font-semibold tabular-nums ${summary.net_activity >= 0 ? "text-green-700" : "text-red-600"}`}>
+                      {fmtMoney(summary.net_activity)}
                     </p>
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 px-5 py-4 border-b border-gray-200 flex-shrink-0">
+                  {[
+                    { label: "Beg Balance", value: fmtMoney(summary.beg_balance) },
+                    { label: "Total Debits", value: fmtMoney(summary.total_debits) },
+                    { label: "Total Credits", value: fmtMoney(summary.total_credits) },
+                    {
+                      label: "Net Activity",
+                      value: fmtMoney(summary.net_activity),
+                      colored: true,
+                      positive: summary.net_activity >= 0,
+                    },
+                    { label: "End Balance", value: fmtMoney(summary.end_balance), bold: true },
+                  ].map((item) => (
+                    <div key={item.label}>
+                      <p className="text-xs text-gray-500">{item.label}</p>
+                      <p
+                        className={`text-sm font-semibold tabular-nums ${
+                          item.bold
+                            ? "text-gray-900"
+                            : item.colored
+                            ? item.positive
+                              ? "text-green-700"
+                              : "text-red-600"
+                            : "text-gray-700"
+                        }`}
+                      >
+                        {item.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )
             )}
 
             {/* Transaction table */}
@@ -290,7 +310,13 @@ function TransactionModal({
 
 const OVERHEAD_COLOR = "#7B3FA0";
 
-function OverheadSummarySection({ rows }: { rows: OverheadRow[] }) {
+function OverheadSummarySection({
+  rows,
+  onAccountClick,
+}: {
+  rows: OverheadRow[];
+  onAccountClick: (accountNo: number, color: string) => void;
+}) {
   const [open, setOpen] = useState(true);
 
   const toNum = (v: string | number) => {
@@ -344,11 +370,16 @@ function OverheadSummarySection({ rows }: { rows: OverheadRow[] }) {
                 </thead>
                 <tbody>
                   {rows.map((row) => (
-                    <tr key={row.gl_account_id} className="hover:bg-gray-50">
+                    <tr
+                      key={row.gl_account_id}
+                      className="hover:bg-gray-50 cursor-pointer group"
+                      onClick={() => onAccountClick(row.account_no, OVERHEAD_COLOR)}
+                      title="Click to view transactions"
+                    >
                       <td className="table-td font-mono text-xs text-gray-500">
                         {row.account_no}
                       </td>
-                      <td className="table-td text-gray-800">
+                      <td className="table-td text-gray-800 group-hover:text-[#1B2A4A] group-hover:underline">
                         {row.description}
                       </td>
                       <td className="table-td text-right tabular-nums text-gray-600">
@@ -619,9 +650,12 @@ export default function WeekDetailPage({
             />
           ))}
 
-          {/* Overhead (Div 99) — read-only */}
+          {/* Overhead (Div 99) */}
           {overheadRows.length > 0 && (
-            <OverheadSummarySection rows={overheadRows} />
+            <OverheadSummarySection
+              rows={overheadRows}
+              onAccountClick={(accountNo, color) => setModalAccount({ accountNo, color })}
+            />
           )}
 
           {/* Bid Activity card */}

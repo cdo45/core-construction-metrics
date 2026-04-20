@@ -22,11 +22,12 @@ export interface TransactionSummary {
   account_no: number;
   description: string;
   normal_balance: "debit" | "credit";
-  beg_balance: number;
-  end_balance: number;
+  beg_balance: number | null;
+  end_balance: number | null;
   total_debits: number;
   total_credits: number;
   net_activity: number;
+  account_type: "overhead" | "balance_sheet";
 }
 
 export interface TransactionsResponse {
@@ -66,11 +67,13 @@ export async function GET(req: NextRequest) {
   try {
     const sql = getDb();
 
-    // Look up GL account
+    // Look up GL account (include category name to detect overhead)
     const acctRows = await sql`
-      SELECT id, account_no, description, normal_balance
-      FROM gl_accounts
-      WHERE account_no = ${accountNo}
+      SELECT ga.id, ga.account_no, ga.description, ga.normal_balance,
+             c.name AS category_name
+      FROM gl_accounts ga
+      LEFT JOIN categories c ON c.id = ga.category_id
+      WHERE ga.account_no = ${accountNo}
       LIMIT 1
     `;
     if (acctRows.length === 0) {
@@ -81,6 +84,7 @@ export async function GET(req: NextRequest) {
     }
     const acct = acctRows[0];
     const gl_account_id = Number(acct.id);
+    const isOverhead = acct.category_name === "Overhead (Div 99)";
 
     // Fetch transactions
     const trxRows = await sql`
@@ -103,17 +107,20 @@ export async function GET(req: NextRequest) {
       ORDER BY trx_date NULLS LAST, gl_trx_no, id
     `;
 
-    // Fetch balance for this week
-    const balRows = await sql`
-      SELECT beg_balance::numeric, end_balance::numeric
-      FROM weekly_balances
-      WHERE week_ending = ${weekEnding}
-        AND gl_account_id = ${gl_account_id}
-      LIMIT 1
-    `;
-
-    const beg_balance = balRows.length > 0 ? n(balRows[0].beg_balance) : 0;
-    const end_balance = balRows.length > 0 ? n(balRows[0].end_balance) : 0;
+    // Fetch balance for this week (overhead accounts have no weekly_balances entry)
+    let beg_balance: number | null = null;
+    let end_balance: number | null = null;
+    if (!isOverhead) {
+      const balRows = await sql`
+        SELECT beg_balance::numeric, end_balance::numeric
+        FROM weekly_balances
+        WHERE week_ending = ${weekEnding}
+          AND gl_account_id = ${gl_account_id}
+        LIMIT 1
+      `;
+      beg_balance = balRows.length > 0 ? n(balRows[0].beg_balance) : 0;
+      end_balance = balRows.length > 0 ? n(balRows[0].end_balance) : 0;
+    }
 
     const transactions: TransactionRow[] = trxRows.map((r) => ({
       id:            Number(r.id),
@@ -146,6 +153,7 @@ export async function GET(req: NextRequest) {
       total_debits,
       total_credits,
       net_activity,
+      account_type:   isOverhead ? "overhead" : "balance_sheet",
     };
 
     const response: TransactionsResponse = { summary, transactions };

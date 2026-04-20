@@ -332,6 +332,9 @@ export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Pr
                 {importResult.imported_count} overhead account{importResult.imported_count === 1 ? "" : "s"}{" "}
                 · {fmtMoney(importResult.net_total)} net activity
               </p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Transactions saved for drill-down. Re-import any past week to enable drill-down on that week&apos;s overhead accounts.
+              </p>
             </div>
           </div>
           <button onClick={handleReset} className="btn-secondary text-xs">Import another</button>

@@ -187,6 +187,7 @@ export async function POST(req: NextRequest) {
     // Maps are keyed by gl_account_id (DB PK).
     const grouped       = new Map<number, { debits: number; credits: number }>();
     const yeReclassMap  = new Map<number, number>(); // gl_account_id → gross excluded
+    const drilldownTrx: Array<IncomingTransaction & { gl_account_id: number }> = [];
 
     for (const trx of matched) {
       const gl_account_id = accountMap.get(trx.account_no)!;
@@ -205,6 +206,7 @@ export async function POST(req: NextRequest) {
       } else {
         grouped.set(gl_account_id, { debits: n(trx.debit), credits: n(trx.credit) });
       }
+      drilldownTrx.push({ ...trx, gl_account_id });
     }
 
     // Ensure accounts that had ONLY YE reclass rows still get a zero-activity row
@@ -231,6 +233,16 @@ export async function POST(req: NextRequest) {
         DELETE FROM weekly_overhead_spend
         WHERE week_ending = ${week_ending} AND division = '99'
       `,
+      // Clear prior drill-down rows for all overhead accounts
+      txSql`
+        DELETE FROM weekly_transactions
+        WHERE week_ending = ${week_ending}
+          AND gl_account_id IN (
+            SELECT ga.id FROM gl_accounts ga
+            JOIN categories c ON c.id = ga.category_id
+            WHERE c.name = 'Overhead (Div 99)'
+          )
+      `,
       ...Array.from(grouped.entries()).map(([gl_account_id, acct]) => {
         const ye_gross   = yeReclassMap.get(gl_account_id) ?? 0;
         const net_acct   = acct.debits - acct.credits;
@@ -247,6 +259,29 @@ export async function POST(req: NextRequest) {
           )
         `;
       }),
+      // Insert individual transactions for drill-down (YE reclass rows excluded)
+      ...drilldownTrx.map((trx) => txSql`
+        INSERT INTO weekly_transactions (
+          week_ending, gl_account_id, full_account_no, trx_date,
+          journal, audit_no, gl_trx_no, line, job, description,
+          debit, credit, vendor_cust_no, trx_no
+        ) VALUES (
+          ${week_ending},
+          ${trx.gl_account_id},
+          ${trx.full_account_no  || null},
+          ${trx.trx_date         || null},
+          ${trx.journal          || null},
+          ${trx.audit_no         || null},
+          ${trx.gl_trx_no        || null},
+          ${trx.line             || null},
+          ${trx.job              || null},
+          ${trx.description      || null},
+          ${n(trx.debit)},
+          ${n(trx.credit)},
+          ${trx.vendor_cust_no   || null},
+          ${trx.trx_no           || null}
+        )
+      `),
     ]);
 
     // ── 6. Log success ────────────────────────────────────────────────────────
