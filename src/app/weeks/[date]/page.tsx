@@ -39,6 +39,19 @@ interface CategoryGroup {
   rows: BalanceRow[];
 }
 
+interface OverheadRow {
+  gl_account_id:             number;
+  account_no:                number;
+  description:               string;
+  category_color:            string;
+  weekly_debit:              string | number;
+  weekly_credit:             string | number;
+  net_activity:              string | number;
+  excluded_ye_reclass_gross: string | number;
+  has_data:                  boolean;
+  source_file:               string | null;
+}
+
 interface TrxRow {
   id: number;
   trx_date: string | null;
@@ -273,6 +286,111 @@ function TransactionModal({
   );
 }
 
+// ─── Overhead Summary Section (read-only) ─────────────────────────────────────
+
+const OVERHEAD_COLOR = "#7B3FA0";
+
+function OverheadSummarySection({ rows }: { rows: OverheadRow[] }) {
+  const [open, setOpen] = useState(true);
+
+  const toNum = (v: string | number) => {
+    const p = parseFloat(String(v));
+    return isFinite(p) ? p : 0;
+  };
+  const totalDebit  = rows.reduce((s, r) => s + toNum(r.weekly_debit),  0);
+  const totalCredit = rows.reduce((s, r) => s + toNum(r.weekly_credit), 0);
+  const totalNet    = rows.reduce((s, r) => s + toNum(r.net_activity),  0);
+  const hasActivity = rows.some((r) => r.has_data);
+
+  return (
+    <div className="card overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-5 py-3 text-left focus:outline-none"
+        style={{ backgroundColor: OVERHEAD_COLOR }}
+      >
+        <span className="font-semibold text-sm text-white">Overhead (Div 99)</span>
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-bold text-white">{fmtMoney(totalNet)}</span>
+          <svg
+            className={`w-4 h-4 text-white transition-transform ${open ? "rotate-180" : ""}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+
+      {open && (
+        <>
+          {!hasActivity ? (
+            <div className="px-5 py-6 text-sm text-gray-400 italic text-center">
+              No overhead activity recorded for this week.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th className="table-th w-24">Account #</th>
+                    <th className="table-th">Description</th>
+                    <th className="table-th text-right w-36">Weekly Debit</th>
+                    <th className="table-th text-right w-36">Weekly Credit</th>
+                    <th className="table-th text-right w-36">Net Activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.gl_account_id} className="hover:bg-gray-50">
+                      <td className="table-td font-mono text-xs text-gray-500">
+                        {row.account_no}
+                      </td>
+                      <td className="table-td text-gray-800">
+                        {row.description}
+                      </td>
+                      <td className="table-td text-right tabular-nums text-gray-600">
+                        {fmtMoney(row.weekly_debit)}
+                      </td>
+                      <td className="table-td text-right tabular-nums text-gray-600">
+                        {fmtMoney(row.weekly_credit)}
+                      </td>
+                      <td className="table-td text-right tabular-nums font-medium text-gray-900">
+                        {fmtMoney(row.net_activity)}
+                      </td>
+                    </tr>
+                  ))}
+
+                  {/* Category total row */}
+                  <tr className="bg-gray-50">
+                    <td
+                      colSpan={2}
+                      className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide border-t border-gray-200"
+                    >
+                      Total
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200 tabular-nums">
+                      {fmtMoney(totalDebit)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200 tabular-nums">
+                      {fmtMoney(totalCredit)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-sm font-bold text-gray-900 border-t border-gray-200 tabular-nums">
+                      {fmtMoney(totalNet)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Collapsible Category Section ─────────────────────────────────────────────
 
 function CategorySection({
@@ -391,6 +509,7 @@ export default function WeekDetailPage({
 }) {
   const { date } = use(params);
   const [balances, setBalances] = useState<BalanceRow[]>([]);
+  const [overheadRows, setOverheadRows] = useState<OverheadRow[]>([]);
   const [bids, setBids] = useState<BidActivity | null>(null);
   const [notes, setNotes] = useState<WeeklyNote | null>(null);
   const [report, setReport] = useState<WeeklyReportData | null>(null);
@@ -401,8 +520,9 @@ export default function WeekDetailPage({
   useEffect(() => {
     async function load() {
       try {
-        const [balRes, bidRes, noteRes, reportRes] = await Promise.all([
+        const [balRes, overheadRes, bidRes, noteRes, reportRes] = await Promise.all([
           fetch(`/api/weekly-balances?week_ending=${date}`),
+          fetch(`/api/weekly-overhead?week_ending=${date}`),
           fetch(`/api/bid-activity?week_ending=${date}`),
           fetch(`/api/weekly-notes?week_ending=${date}`),
           fetch(`/api/weekly-report?week_ending=${date}`),
@@ -412,6 +532,10 @@ export default function WeekDetailPage({
         const balData = await balRes.json();
         setBalances(balData.balances ?? []);
 
+        if (overheadRes.ok) {
+          const overheadData = await overheadRes.json() as { accounts?: OverheadRow[] };
+          setOverheadRows(overheadData.accounts ?? []);
+        }
         if (bidRes.ok) setBids(await bidRes.json());
         if (noteRes.ok) setNotes(await noteRes.json());
         if (reportRes.ok) setReport(await reportRes.json());
@@ -494,6 +618,11 @@ export default function WeekDetailPage({
               }
             />
           ))}
+
+          {/* Overhead (Div 99) — read-only */}
+          {overheadRows.length > 0 && (
+            <OverheadSummarySection rows={overheadRows} />
+          )}
 
           {/* Bid Activity card */}
           <div className="card">

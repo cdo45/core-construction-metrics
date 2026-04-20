@@ -39,12 +39,20 @@ export interface ReportRatios {
   quick_ratio: number | null;
 }
 
+export interface OverheadSummary {
+  current_net: number;
+  prior_net:   number;
+  change:      number;
+  change_pct:  number;
+}
+
 export interface WeeklyReportData {
   week_ending: string;
   prior_week_ending: string | null;
   categories: ReportCategory[];
   ratios: ReportRatios;
   prior_ratios: ReportRatios | null;
+  overhead_summary: OverheadSummary | null;
 }
 
 // ─── Helper: safe numeric parse ───────────────────────────────────────────────
@@ -207,8 +215,8 @@ export async function GET(req: NextRequest) {
         const change = current_total - prior_total;
         const change_pct =
           prior_total !== 0 ? (change / Math.abs(prior_total)) * 100 : 0;
-        // Sort accounts by absolute change descending
-        cat.accounts.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+        // Accounts stay in account_no ASC order from the SQL ORDER BY — the
+        // client may opt into a different sort via a UI toggle.
         return {
           name: cat.name,
           color: cat.color,
@@ -243,12 +251,49 @@ export async function GET(req: NextRequest) {
       prior_ratios = buildRatios(pCash, pAR, pAP, pPayroll);
     }
 
+    // ── 5. Overhead (Div 99) summary — net activity this week vs prior ──────
+    const currentOverhead = await sql`
+      SELECT COALESCE(SUM(net_activity), 0) AS total_net
+      FROM weekly_overhead_spend
+      WHERE week_ending = ${weekEnding}
+        AND division    = '99'
+    `;
+    const currentOverheadNet = n(currentOverhead[0]?.total_net);
+
+    let priorOverheadNet = 0;
+    if (priorWeekEnding) {
+      const priorOverhead = await sql`
+        SELECT COALESCE(SUM(net_activity), 0) AS total_net
+        FROM weekly_overhead_spend
+        WHERE week_ending = ${priorWeekEnding}
+          AND division    = '99'
+      `;
+      priorOverheadNet = n(priorOverhead[0]?.total_net);
+    }
+
+    const overheadChange = currentOverheadNet - priorOverheadNet;
+    const overheadChangePct =
+      priorOverheadNet !== 0
+        ? (overheadChange / Math.abs(priorOverheadNet)) * 100
+        : 0;
+
+    const overhead_summary: OverheadSummary | null =
+      currentOverheadNet !== 0 || priorOverheadNet !== 0
+        ? {
+            current_net: currentOverheadNet,
+            prior_net:   priorOverheadNet,
+            change:      overheadChange,
+            change_pct:  overheadChangePct,
+          }
+        : null;
+
     const response: WeeklyReportData = {
       week_ending: weekEnding,
       prior_week_ending: priorWeekEnding,
       categories,
       ratios,
       prior_ratios,
+      overhead_summary,
     };
 
     return NextResponse.json(response);
