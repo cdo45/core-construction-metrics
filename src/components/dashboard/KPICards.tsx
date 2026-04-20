@@ -1,6 +1,7 @@
 "use client";
 
 import type { WeekMetric } from "@/app/api/metrics/route";
+import type { CashBurnData } from "@/app/api/metrics/cash-burn/route";
 
 // ─── Colours ────────────────────────────────────────────────────────────────
 
@@ -48,14 +49,16 @@ export function fmtDate(iso: string): string {
 
 export function KPISkeleton() {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="card p-4 animate-pulse">
-          <div className="h-3 w-20 bg-gray-200 rounded mb-3" />
-          <div className="h-6 w-28 bg-gray-200 rounded mb-2" />
-          <div className="h-3 w-16 bg-gray-100 rounded" />
-        </div>
-      ))}
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="card p-4 animate-pulse">
+            <div className="h-3 w-20 bg-gray-200 rounded mb-3" />
+            <div className="h-6 w-28 bg-gray-200 rounded mb-2" />
+            <div className="h-3 w-16 bg-gray-100 rounded" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -100,6 +103,7 @@ function KPICard({
     change !== null && change !== 0
       ? fmtPct(change) // already formatted if dollar, but for % cards we skip
       : null;
+  void pct;
 
   return (
     <div
@@ -124,9 +128,106 @@ function KPICard({
   );
 }
 
+// ─── Burn KPI Cards ───────────────────────────────────────────────────────────
+
+function BurnCard({ data }: { data: CashBurnData }) {
+  const burn   = data.weekly_burn.net_weekly_burn;
+  const prior  = data.prior_net_weekly_burn;
+  const change = prior !== null ? burn - prior : null;
+  // burn increasing = bad (inverse: up arrow = red)
+  const changeColor =
+    change === null || change === 0 ? "text-gray-400" :
+    change > 0 ? "text-red-600" : "text-green-600";
+
+  return (
+    <div
+      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      style={{ borderLeft: "4px solid #C00000" }}
+    >
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+        Weekly Cash Burn
+      </p>
+      <p className="text-xl font-bold text-gray-900 tabular-nums leading-tight">
+        {fmtMoneyShort(burn)}
+      </p>
+      {change !== null ? (
+        <p className={`text-xs font-medium flex items-center gap-0.5 ${changeColor}`}>
+          <span>{change > 0 ? "↑" : "↓"}</span>
+          <span>{fmtMoneyShort(Math.abs(change))} WoW</span>
+        </p>
+      ) : (
+        <p className="text-xs text-gray-400">No prior data</p>
+      )}
+    </div>
+  );
+}
+
+function RunwayCard({ data }: { data: CashBurnData }) {
+  const r = data.runway_weeks;
+  const display = r >= 999 ? "∞" : `${r.toFixed(1)} wks`;
+  const color =
+    r >= 8 ? "#548235" :
+    r >= 4 ? "#ED7D31" : "#C00000";
+  const nonCash    = data.weekly_burn.overhead_non_cash;
+  const avgOverhead = data.weekly_burn.overhead_cash;
+
+  return (
+    <div
+      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      style={{ borderLeft: `4px solid ${color}` }}
+    >
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+        Cash Runway
+      </p>
+      <p className="text-xl font-bold tabular-nums leading-tight" style={{ color }}>
+        {display}
+      </p>
+      <p className="text-xs text-gray-400 leading-tight">
+        Excl. {fmtMoneyShort(nonCash)}/wk non-cash · {fmtMoneyShort(avgOverhead)}/wk overhead
+      </p>
+    </div>
+  );
+}
+
+function CriticalDateCard({ data }: { data: CashBurnData }) {
+  const r = data.runway_weeks;
+  const color =
+    r >= 8 ? "#548235" :
+    r >= 4 ? "#ED7D31" : "#C00000";
+
+  const dateDisplay = data.critical_date
+    ? new Date(data.critical_date + "T12:00:00Z").toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+      })
+    : "—";
+
+  return (
+    <div
+      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      style={{ borderLeft: `4px solid ${color}` }}
+    >
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+        Critical Date
+      </p>
+      <p className="text-xl font-bold tabular-nums leading-tight" style={{ color }}>
+        {dateDisplay}
+      </p>
+      <p className="text-xs text-gray-400">
+        Need {fmtMoneyShort(data.required_weekly_ar)}/wk in AR to maintain
+      </p>
+    </div>
+  );
+}
+
 // ─── KPI Cards Row ────────────────────────────────────────────────────────────
 
-export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
+export default function KPICards({
+  weeks,
+  cashBurn,
+}: {
+  weeks: WeekMetric[];
+  cashBurn?: CashBurnData;
+}) {
   if (weeks.length === 0) return <KPISkeleton />;
 
   const latest = weeks[weeks.length - 1];
@@ -192,10 +293,19 @@ export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
-      {cards.map((c) => (
-        <KPICard key={c.label} {...c} />
-      ))}
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
+        {cards.map((c) => (
+          <KPICard key={c.label} {...c} />
+        ))}
+      </div>
+      {cashBurn && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <BurnCard    data={cashBurn} />
+          <RunwayCard  data={cashBurn} />
+          <CriticalDateCard data={cashBurn} />
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,87 @@
 
 import { useEffect, useState, useCallback } from "react";
 
+// ─── Cash Safety Floor Section ────────────────────────────────────────────────
+
+function CashSafetyFloorSection() {
+  const [value,  setValue]  = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+  const [error,  setError]  = useState("");
+
+  useEffect(() => {
+    fetch("/api/app-settings?key=cash_safety_floor")
+      .then(async (r) => {
+        if (r.ok) {
+          const d = await r.json() as { key: string; value: string };
+          setValue(d.value ?? "500000");
+        } else {
+          setValue("500000");
+        }
+      })
+      .catch(() => setValue("500000"));
+  }, []);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    setSaved(false);
+    try {
+      const res = await fetch("/api/app-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "cash_safety_floor", value }),
+      });
+      if (!res.ok) {
+        const d = await res.json() as { error?: string };
+        setError(d.error ?? "Failed to save.");
+      } else {
+        setSaved(true);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h2 className="text-base font-semibold text-gray-900">Cash Safety Floor</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Minimum cash to maintain — runway calculations stop here, not zero.
+        </p>
+      </div>
+      <div className="px-6 py-4">
+        <form onSubmit={handleSave} className="flex flex-wrap items-end gap-3">
+          <div className="w-48">
+            <label className="block text-xs text-gray-600 mb-1">Safety Floor ($)</label>
+            <input
+              type="number"
+              value={value}
+              onChange={(e) => { setValue(e.target.value); setSaved(false); }}
+              placeholder="500000"
+              className="input-field"
+              min={0}
+              step={1000}
+              required
+            />
+          </div>
+          <div>
+            <button type="submit" disabled={saving} className="btn-primary">
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+          {saved && <span className="text-xs text-green-600 font-medium">Saved ✓</span>}
+          {error && <span className="text-xs text-red-600">{error}</span>}
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Category {
@@ -563,6 +644,7 @@ export default function SetupPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
+          <CashSafetyFloorSection />
           <CategoriesSection categories={categories} onRefresh={fetchData} />
           <GlAccountsSection
             accounts={accounts}

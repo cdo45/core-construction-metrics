@@ -25,8 +25,21 @@ export async function POST() {
         normal_balance VARCHAR(6) NOT NULL CHECK (normal_balance IN ('debit', 'credit')),
         category_id    INT REFERENCES categories(id),
         is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+        is_non_cash    BOOLEAN NOT NULL DEFAULT FALSE,
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `;
+
+    // Migration: add is_non_cash for DBs created before this column existed
+    await sql`
+      ALTER TABLE gl_accounts
+        ADD COLUMN IF NOT EXISTS is_non_cash BOOLEAN NOT NULL DEFAULT FALSE
+    `;
+
+    // Mark depreciation accounts as non-cash
+    await sql`
+      UPDATE gl_accounts SET is_non_cash = TRUE
+      WHERE account_no IN (6060, 6070)
     `;
 
     // Create weekly_balances table
@@ -315,6 +328,21 @@ export async function POST() {
         )
       `;
     }
+
+    // ── Create and seed app_settings table ───────────────────────────────────
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key        VARCHAR(50) PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `;
+
+    await sql`
+      INSERT INTO app_settings (key, value)
+      VALUES ('cash_safety_floor', '500000')
+      ON CONFLICT (key) DO NOTHING
+    `;
 
     return NextResponse.json(
       { success: true, message: "Database seeded successfully." },

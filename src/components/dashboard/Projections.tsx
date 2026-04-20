@@ -352,10 +352,12 @@ function ScenarioCard({
   scenario,
   latest,
   color,
+  overheadBurn,
 }: {
   scenario: { label: string; weeks: ProjectedWeek[] };
   latest: { cash: number; ar: number; ap: number; payroll: number; net_position: number };
   color: string;
+  overheadBurn: number;
 }) {
   const w4 = scenario.weeks[3];
   if (!w4) return null;
@@ -380,6 +382,14 @@ function ScenarioCard({
         <DeltaRow label="Accounts Rec." current={latest.ar}           projected={w4.ar}        />
         <DeltaRow label="Accounts Pay." current={latest.ap}           projected={w4.ap}        inverseGood />
         <DeltaRow label="Payroll Liab." current={latest.payroll}      projected={w4.payroll}   inverseGood />
+        {overheadBurn > 0 && (
+          <div className="flex items-center justify-between py-1.5 border-b border-gray-100">
+            <span className="text-xs text-gray-600">Weekly Overhead Drain</span>
+            <span className="text-sm font-semibold tabular-nums text-red-600">
+              -{fmtMoneyShort(overheadBurn)}
+            </span>
+          </div>
+        )}
         <div className="mt-2 pt-2 border-t border-gray-200">
           <DeltaRow label="Net Position" current={latest.net_position} projected={w4.net_position} />
         </div>
@@ -404,11 +414,13 @@ function ScenarioCards({ data }: { data: ProjectionsData }) {
     net_position: data.historical_weeks[data.historical_weeks.length - 1]?.net_position ?? 0,
   };
 
+  const overheadBurn = data.baseline_rates.avg_overhead_cash_burn;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      <ScenarioCard scenario={data.scenarios.ideal}    latest={latest} color={COLORS.ideal}    />
-      <ScenarioCard scenario={data.scenarios.realistic} latest={latest} color={COLORS.realistic} />
-      <ScenarioCard scenario={data.scenarios.survival}  latest={latest} color={COLORS.survival}  />
+      <ScenarioCard scenario={data.scenarios.ideal}    latest={latest} color={COLORS.ideal}    overheadBurn={overheadBurn} />
+      <ScenarioCard scenario={data.scenarios.realistic} latest={latest} color={COLORS.realistic} overheadBurn={overheadBurn} />
+      <ScenarioCard scenario={data.scenarios.survival}  latest={latest} color={COLORS.survival}  overheadBurn={overheadBurn} />
     </div>
   );
 }
@@ -488,6 +500,19 @@ function BaselineRatesPanel({ data }: { data: ProjectionsData }) {
             )}
             {r.weeks_since_last_union_remittance > 0 && (
               <RateRow label="Weeks Since Last Union Remit" value={String(r.weeks_since_last_union_remittance)} />
+            )}
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-3">
+              Overhead
+            </p>
+            {r.avg_overhead_cash_burn > 0 || r.avg_overhead_non_cash > 0 ? (
+              <>
+                <RateRow label="Avg Weekly Cash Overhead"  value={fmtMoney(r.avg_overhead_cash_burn)} />
+                <RateRow label="Non-Cash (Depreciation)"   value={fmtMoney(r.avg_overhead_non_cash)} />
+              </>
+            ) : (
+              <p className="text-xs text-gray-400 italic">No overhead data available</p>
             )}
           </div>
         </div>
