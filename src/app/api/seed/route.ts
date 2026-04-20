@@ -168,7 +168,7 @@ export async function POST() {
       { name: "Who Owes Us",         sort_order: 2, color: "#4472C4" },
       { name: "Who We Owe",          sort_order: 3, color: "#C00000" },
       { name: "Payroll Liabilities", sort_order: 4, color: "#ED7D31" },
-      { name: "Overhead (Div 99)",   sort_order: 5, color: "#E67E22" },
+      { name: "Overhead (Div 99)",   sort_order: 5, color: "#7B3FA0" },
     ];
 
     for (const cat of defaultCategories) {
@@ -214,6 +214,104 @@ export async function POST() {
           (SELECT id FROM categories WHERE name = ${acct.category} LIMIT 1)
         WHERE NOT EXISTS (
           SELECT 1 FROM gl_accounts WHERE account_no = ${acct.account_no}
+        )
+      `;
+    }
+
+    // ── Seed Overhead (Div 99) GL accounts ───────────────────────────────────
+    // All debit-normal, resolved against the "Overhead (Div 99)" category.
+    const overheadAccounts = [
+      // 5000-series: indirect / unallocated construction costs
+      [5101, "DIRECT LABOR"],
+      [5210, "PAYROLL TAXES"],
+      [5220, "W/C INSURANCE"],
+      [5231, "UNALLOCATED G/L INS"],
+      [5250, "UNION BENEFITS"],
+      [5300, "DIRECT MATERIAL"],
+      [5322, "HIGHWAY"],
+      [5325, "OUTSIDE RENTED EQ"],
+      [5510, "REPAIRS & MAINT-EQ"],
+      [5531, "RENTALS - EQ"],
+      // 6000-series: indirect equipment & shop
+      [6005, "AUTOS - INSURANCE"],
+      [6010, "AUTOS-FUEL&LUBRICANT"],
+      [6020, "AUTOS-LEASING&RENTAL"],
+      [6030, "MISC. SMALL TOOLS"],
+      [6040, "OTHER EQUIPMENT COST"],
+      [6050, "ALLOCATED EQ. COSTS"],
+      [6060, "DEPRECIATION"],
+      [6070, "DEPRECIATION - OTHER"],
+      [6080, "INDIRECT LABOR"],
+      [6100, "P/R TAXES"],
+      [6110, "W/C INSURANCE"],
+      [6120, "GEN. LIAB. INSURANCE"],
+      [6130, "UNION BENEFITS"],
+      [6140, "Maint Labor Debit"],
+      [6150, "REPAIRS - PARTS"],
+      [6160, "REPAIRS - OUTSIDE"],
+      [6170, "TIRES - REPAIR"],
+      [6180, "TIRES - REPLACEMENT"],
+      [6190, "OTHER"],
+      [6200, "HIGHWAY - NO PROJECT"],
+      [6210, "RENTALS - NO PROJECT"],
+      [6220, "TEETH PARTS"],
+      [6230, "TRAFFIC CONTROL SUPPLIES"],
+      // 7000-series: G&A / office overhead
+      [7000, "OFFICE-SUPPLIES&EXP"],
+      [7010, "OFFICE-RENT"],
+      [7020, "OFFICE-JNTRL&RPR/MNT"],
+      [7030, "OFFICE-POSTAGE"],
+      [7040, "OFFICE-UTILITIES"],
+      [7050, "OFFICE-TELEPHONE"],
+      [7060, "OFFICE-BIDDING EXP"],
+      [7070, "COMPUTER EXPENSES"],
+      [7075, "FOUNDATION SYSTEM FEES"],
+      [7080, "GEN. LIAB. INSURANCE"],
+      [7090, "FREIGHT&SHIPPING"],
+      [7100, "BANK SERVICE CHARGES"],
+      [7110, "PROMOTIONAL EXPENSES"],
+      [7120, "EDUCATIONAL EXPENSES"],
+      [7125, "EMPLOYEE APPRECIATION"],
+      [7130, "ACCOUNTING FEES"],
+      [7135, "PAYROLL PROCESSING FEES"],
+      [7140, "LEGAL FEES"],
+      [7150, "CHARITABLE CONTRIB"],
+      [7160, "TRAVEL EXPENSES"],
+      [7165, "MEAL EXP"],
+      [7170, "ENTERTAINMENT EXP"],
+      [7180, "DISPOSAL SERVICES"],
+      [7190, "DUES & SUBSCRIPTIONS"],
+      [7200, "LICENSE"],
+      [7210, "PENALTIES&MISC FINES"],
+      [7220, "MISCELLANEOUS EXP"],
+      [7225, "Misc. Expense - Fire"],
+      [7230, "INTEREST EXPENSE & FIN CHARGES"],
+      [7240, "INTEREST NON ALLOC"],
+      [7250, "INTEREST NON ALLOCCA"],
+      [7260, "G&A WAGES"],
+      [7280, "PAYROLL TAX EXPENSE"],
+      [7290, "W/C INSURANCE"],
+      [7300, "GROUP HEALTH INS"],
+      [7310, "EMPLOYEE BENEFITS"],
+      [7320, "401K (CO.Paid) Plan"],
+      [7330, "Employee Bonus"],
+      [7340, "ESOP Contribution Expense"],
+      [7350, "INSURANCE EXPENSE"],
+      [7360, "DAMAGES-CLAIMS"],
+      [7410, "Administrative Fees"],
+      [7500, "CA Corporate Taxes"],
+    ] as [number, string][];
+
+    for (const [account_no, description] of overheadAccounts) {
+      await sql`
+        INSERT INTO gl_accounts (account_no, description, normal_balance, category_id)
+        SELECT
+          ${account_no},
+          ${description},
+          'debit',
+          (SELECT id FROM categories WHERE name = 'Overhead (Div 99)' LIMIT 1)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM gl_accounts WHERE account_no = ${account_no}
         )
       `;
     }
