@@ -92,21 +92,26 @@ export function parseTBCsv(text: string): TBParseResult {
     const cols = splitLine(line);
     if (cols.length < 4) { skipped_count++; continue; }
 
+    // Positional: account=first, credits=last, debits=second-to-last, desc=everything between.
+    // This tolerates any number of unquoted commas in the description.
     const rawAcct = cols[0].replace(/"/g, "").trim();
-    const desc    = cols[1].replace(/"/g, "").trim();
-    const debStr  = cols[2];
-    const credStr = cols[3];
+    const credStr = cols[cols.length - 1];
+    const debStr  = cols[cols.length - 2];
+    const desc    = cols.slice(1, cols.length - 2).map(c => c.replace(/"/g, "").trim()).join(",");
 
     // Skip header row (first column is "Account No" / "Account")
     if (/^account\s*(no\.?)?$/i.test(rawAcct)) { skipped_count++; continue; }
 
-    // Detect "Total Trial Balance" footer — may have empty account col
-    if (/total\s+trial\s+balance/i.test(desc) || (!rawAcct && /total/i.test(desc))) {
+    // Capture "Total Trial Balance" footer (empty account col + "Total" in desc)
+    if (!rawAcct && /total/i.test(desc)) {
       footer_debit  = parseMoney(debStr);
       footer_credit = parseMoney(credStr);
       skipped_count++;
       continue;
     }
+
+    // Skip any subtotal/total rows (e.g. division subtotals)
+    if (/total/i.test(desc)) { skipped_count++; continue; }
 
     const parsed = parseAccount(rawAcct);
     if (!parsed) { skipped_count++; continue; }

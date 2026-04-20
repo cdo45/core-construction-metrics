@@ -58,6 +58,7 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
   const [parseError,   setParseError]   = useState("");
   const [importError,  setImportError]  = useState("");
   const [rows,         setRows]         = useState<ParsedTBRow[]>([]);
+  const [fileTotals,   setFileTotals]   = useState<{ debits: number; credits: number } | null>(null);
   const [sourceFile,   setSourceFile]   = useState("");
   const [result,       setResult]       = useState<ImportResult | null>(null);
   const [overwrite,    setOverwrite]    = useState<OverwriteInfo | null>(null);
@@ -78,9 +79,12 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
   const inScopeRows    = scopeLoaded ? rows.filter((r) => scopeSet.has(acctKey(r)))  : rows;
   const outOfScopeRows = scopeLoaded ? rows.filter((r) => !scopeSet.has(acctKey(r))) : [];
 
-  const totalDebit  = rows.reduce((s, r) => s + r.debit,  0);
-  const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
-  const balanced    = Math.abs(totalDebit - totalCredit) <= 1.0;
+  const inScopeDebit  = inScopeRows.reduce((s, r) => s + r.debit,  0);
+  const inScopeCredit = inScopeRows.reduce((s, r) => s + r.credit, 0);
+
+  // File-level balance: use footer totals when present; missing footer = soft warning only
+  const fileBalanced = fileTotals === null
+    || Math.abs(fileTotals.debits - fileTotals.credits) <= 1.0;
 
   // Per-category breakdown for preview
   const categoryMap = new Map<string, { color: string; debit: number; credit: number; count: number }>();
@@ -124,6 +128,11 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
           return;
         }
         setRows(parsed.rows);
+        setFileTotals(
+          parsed.footer_debit > 0 || parsed.footer_credit > 0
+            ? { debits: parsed.footer_debit, credits: parsed.footer_credit }
+            : null,
+        );
         setSourceFile(file.name);
         setStage("parsed");
       } catch (err) {
@@ -150,9 +159,9 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
   // ── Import flow ──────────────────────────────────────────────────────────
 
   async function handleCheckAndImport() {
-    if (!balanced) {
+    if (!fileBalanced && fileTotals) {
       setImportError(
-        `Trial balance does not balance: debits ${fmtMoney(totalDebit)} ≠ credits ${fmtMoney(totalCredit)}`
+        `File does not balance: debits ${fmtMoney(fileTotals.debits)} ≠ credits ${fmtMoney(fileTotals.credits)}`
       );
       return;
     }
@@ -184,7 +193,12 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
       const res = await fetch("/api/import-trial-balance", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ week_ending: weekEnding, parsed_rows: payload, source_file: sourceFile }),
+        body:    JSON.stringify({
+          week_ending:  weekEnding,
+          parsed_rows:  payload,
+          source_file:  sourceFile,
+          file_totals:  fileTotals,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -204,6 +218,7 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
   function handleReset() {
     setStage("idle");
     setRows([]);
+    setFileTotals(null);
     setSourceFile("");
     setResult(null);
     setParseError("");
@@ -336,8 +351,8 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
             {outOfScopeRows.length > 0 && (
               <span className="text-amber-600"> · {outOfScopeRows.length} out-of-scope (skipped)</span>
             )}
-            {!balanced && (
-              <span className="text-red-600 font-medium"> · ⚠ UNBALANCED</span>
+            {!fileBalanced && (
+              <span className="text-red-600 font-medium"> · ⚠ FILE UNBALANCED</span>
             )}
             {sourceFile ? ` · ${sourceFile}` : ""}
           </p>
@@ -346,7 +361,7 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
           <button onClick={handleReset} className="btn-secondary text-xs">Clear</button>
           <button
             onClick={handleCheckAndImport}
-            disabled={stage === "importing" || !balanced}
+            disabled={stage === "importing" || !fileBalanced}
             className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-60"
           >
             {stage === "importing" ? (
@@ -378,15 +393,31 @@ export default function TrialBalanceImporter({ weekEnding, onImportComplete }: P
         </div>
       )}
 
-      {/* Balance check */}
-      <div className={`px-5 py-2.5 text-xs border-b border-gray-100 flex items-center justify-between ${balanced ? "bg-green-50" : "bg-red-50"}`}>
-        <span className={balanced ? "text-green-700" : "text-red-700 font-medium"}>
-          {balanced ? "✓ Balanced" : "⚠ Does not balance — cannot import"}
-        </span>
-        <span className="tabular-nums text-gray-600">
-          Debits {fmtMoney(totalDebit)} · Credits {fmtMoney(totalCredit)}
-          {!balanced && ` · Diff ${fmtMoney(Math.abs(totalDebit - totalCredit))}`}
-        </span>
+      {/* File balance check */}
+      <div className={`px-5 py-2.5 text-xs border-b border-gray-100 ${
+        !fileTotals ? "bg-amber-50" : fileBalanced ? "bg-green-50" : "bg-red-50"
+      }`}>
+        <div className="flex items-center justify-between">
+          <span className={!fileTotals ? "text-amber-700" : fileBalanced ? "text-green-700" : "text-red-700 font-medium"}>
+            {!fileTotals
+              ? "⚠ No totals row — file balance unverified"
+              : fileBalanced
+              ? "✓ File balanced"
+              : "⚠ File does not balance — cannot import"}
+          </span>
+          {fileTotals && (
+            <span className="tabular-nums text-gray-600">
+              File: {fmtMoney(fileTotals.debits)} Dr · {fmtMoney(fileTotals.credits)} Cr
+              {!fileBalanced && ` · Diff ${fmtMoney(Math.abs(fileTotals.debits - fileTotals.credits))}`}
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex items-center justify-between text-gray-500">
+          <span>
+            In-scope: {inScopeRows.length} accounts · {fmtMoney(inScopeDebit)} Dr + {fmtMoney(inScopeCredit)} Cr
+          </span>
+          <span className="italic">Subset will not balance — offsets are in out-of-scope accounts (revenue, equity, etc.)</span>
+        </div>
       </div>
 
       {/* Per-category breakdown */}
