@@ -15,6 +15,7 @@ interface ImportBody {
   week_ending:  string;
   parsed_rows:  IncomingRow[];
   source_file?: string;
+  file_totals?: { debits: number; credits: number };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { week_ending, parsed_rows, source_file } = body;
+  const { week_ending, parsed_rows, source_file, file_totals } = body;
 
   // ── Validate week_ending ──────────────────────────────────────────────────
   if (!week_ending || !/^\d{4}-\d{2}-\d{2}$/.test(week_ending)) {
@@ -98,11 +99,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Validate trial balance totals ────────────────────────────────────────
+  // ── Validate file-level balance (hard block if file footer present + unbalanced) ──
+  // We intentionally import only ~143 of 300+ accounts, so the filtered subset
+  // will never balance on its own — that's by design. Only the full-file totals matter.
   const inputDebit  = parsed_rows.reduce((s, r) => s + n(r.debit),  0);
   const inputCredit = parsed_rows.reduce((s, r) => s + n(r.credit), 0);
-  if (Math.abs(inputDebit - inputCredit) > 1.0) {
-    const msg = `Trial balance does not balance: debits ${inputDebit.toFixed(2)} ≠ credits ${inputCredit.toFixed(2)}`;
+
+  if (file_totals && Math.abs(file_totals.debits - file_totals.credits) > 1.0) {
+    const diff = Math.abs(file_totals.debits - file_totals.credits);
+    const msg =
+      `Source file is not balanced — Foundation export may be corrupted. ` +
+      `File totals: debits $${file_totals.debits.toFixed(2)}, ` +
+      `credits $${file_totals.credits.toFixed(2)}, ` +
+      `difference $${diff.toFixed(2)}`;
     const sql = getDb();
     await writeImportLog(sql, { week_ending, source_file, status: "failed", error_message: msg });
     return NextResponse.json({ error: msg }, { status: 400 });
@@ -238,6 +247,9 @@ export async function POST(req: NextRequest) {
     ).length;
 
     const warnings: string[] = [];
+    if (!file_totals) {
+      warnings.push("Could not verify file balance — no totals row found. Proceeding with import.");
+    }
     if (unknown.length > 10) {
       warnings.push(`${unknown.length} account(s) in the CSV were not recognised and were skipped.`);
     }
