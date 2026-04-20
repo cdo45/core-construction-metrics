@@ -8,6 +8,7 @@ export interface WeekMetric {
   cash: number;
   ar: number;
   ap: number;
+  lt_debt: number;
   payroll: number;
   payroll_field: number;
   overhead: number;
@@ -15,6 +16,7 @@ export interface WeekMetric {
   cash_change: number | null;
   ar_change: number | null;
   ap_change: number | null;
+  lt_debt_change: number | null;
   payroll_change: number | null;
   ar_collected: number | null;
   ap_paid: number | null;
@@ -23,10 +25,10 @@ export interface WeekMetric {
   bids_won_count: number;
   bids_won_value: number;
   // Financial health ratios
-  current_ratio: number | null;       // (cash + ar) / (ap + payroll)
-  quick_ratio: number | null;         // cash / (ap + payroll)
+  current_ratio: number | null;       // (cash + ar) / (ap + payroll) — current liabilities only
+  quick_ratio: number | null;         // cash / (ap + payroll) — current liabilities only
   ar_to_ap: number | null;            // ar / ap
-  net_liquidity: number;              // cash - ap - payroll (alias of net_position)
+  net_liquidity: number;              // cash - ap - lt_debt - payroll
   payroll_coverage: number | null;    // cash / payroll
   cash_coverage_weeks: number | null; // cash / abs(avg weekly cash burn)
 }
@@ -81,7 +83,8 @@ export async function GET() {
         w.week_ending::text,
         COALESCE(MAX(CASE WHEN ct.cat = 'Cash on Hand'        THEN ct.total END), 0) AS cash,
         COALESCE(MAX(CASE WHEN ct.cat = 'Who Owes Us'         THEN ct.total END), 0) AS ar,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe'          THEN ct.total END), 0) AS ap,
+        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe (Current)'   THEN ct.total END), 0) AS ap,
+        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe (Long-Term)' THEN ct.total END), 0) AS lt_debt,
         COALESCE(MAX(CASE WHEN ct.cat = 'Payroll Liabilities' THEN ct.total END), 0) AS payroll,
         COALESCE(MAX(CASE WHEN ct.cat = 'Payroll (Field)'     THEN ct.total END), 0) AS payroll_field,
         COALESCE(MAX(CASE WHEN ct.cat = 'Overhead (Div 99)'   THEN ct.total END), 0) AS overhead,
@@ -104,6 +107,7 @@ export async function GET() {
       const cash          = n(row.cash);
       const ar            = n(row.ar);
       const ap            = n(row.ap);
+      const lt_debt       = n(row.lt_debt);
       const payroll       = n(row.payroll);
       const payroll_field = n(row.payroll_field);
       const overhead      = n(row.overhead);
@@ -111,6 +115,7 @@ export async function GET() {
       let cash_change: number | null    = null;
       let ar_change: number | null      = null;
       let ap_change: number | null      = null;
+      let lt_debt_change: number | null = null;
       let payroll_change: number | null = null;
       let ar_collected: number | null   = null;
       let ap_paid: number | null        = null;
@@ -120,14 +125,15 @@ export async function GET() {
         cash_change    = cash    - n(prev.cash);
         ar_change      = ar      - n(prev.ar);
         ap_change      = ap      - n(prev.ap);
+        lt_debt_change = lt_debt - n(prev.lt_debt);
         payroll_change = payroll - n(prev.payroll);
         ar_collected   = n(prev.ar) - ar;
         ap_paid        = n(prev.ap) - ap;
       }
 
-      const liabilities = ap + payroll;
-      const current_ratio    = liabilities > 0 ? (cash + ar) / liabilities : null;
-      const quick_ratio      = liabilities > 0 ? cash / liabilities : null;
+      const currentLiabilities = ap + payroll;
+      const current_ratio    = currentLiabilities > 0 ? (cash + ar) / currentLiabilities : null;
+      const quick_ratio      = currentLiabilities > 0 ? cash / currentLiabilities : null;
       const ar_to_ap         = ap > 0 ? ar / ap : null;
       const payroll_coverage = payroll > 0 ? cash / payroll : null;
 
@@ -136,13 +142,15 @@ export async function GET() {
         cash,
         ar,
         ap,
+        lt_debt,
         payroll,
         payroll_field,
         overhead,
-        net_position: cash - ap - payroll,
+        net_position: cash - ap - lt_debt - payroll,
         cash_change,
         ar_change,
         ap_change,
+        lt_debt_change,
         payroll_change,
         ar_collected,
         ap_paid,
@@ -153,7 +161,7 @@ export async function GET() {
         current_ratio,
         quick_ratio,
         ar_to_ap,
-        net_liquidity: cash - ap - payroll,
+        net_liquidity: cash - ap - lt_debt - payroll,
         payroll_coverage,
         cash_coverage_weeks: null as number | null, // filled in pass 2
       };
