@@ -1,136 +1,18 @@
 "use client";
 
 import { useRef, useState } from "react";
+import {
+  type ParsedTransaction,
+  parseCSV,
+} from "@/lib/csv-parser";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ParsedTransaction {
-  account_no: number;
-  full_account_no: string;
-  trx_date: string | null;
-  journal: string;
-  audit_no: string;
-  gl_trx_no: string;
-  line: string;
-  job: string;
-  description: string;
-  debit: number;
-  credit: number;
-  vendor_cust_no: string;
-  trx_no: string;
-}
 
 interface ImportResult {
   imported_count: number;
   accounts_affected: number;
   skipped_accounts: number[];
   week_ending: string;
-}
-
-// ─── CSV Parser ───────────────────────────────────────────────────────────────
-
-// Summary/header row patterns to skip
-const SKIP_PATTERNS = [
-  "Account Totals:",
-  "Beginning Balance:",
-  "Current Period:",
-  "Ending Balance:",
-];
-
-function parseMoney(raw: string): number {
-  return parseFloat(raw.replace(/,/g, "").trim()) || 0;
-}
-
-/**
- * Parse a single CSV line respecting quoted fields.
- * Handles commas inside double-quoted fields.
- */
-function parseCSVLine(line: string): string[] {
-  const fields: string[] = [];
-  let inQuote = false;
-  let current = "";
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuote && line[i + 1] === '"') {
-        // Escaped quote
-        current += '"';
-        i++;
-      } else {
-        inQuote = !inQuote;
-      }
-    } else if (ch === "," && !inQuote) {
-      fields.push(current);
-      current = "";
-    } else {
-      current += ch;
-    }
-  }
-  fields.push(current);
-  return fields;
-}
-
-function parseCSV(text: string): ParsedTransaction[] {
-  const lines = text.split(/\r?\n/);
-  const results: ParsedTransaction[] = [];
-
-  // Skip header row (index 0)
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const cols = parseCSVLine(line).map((c) => c.trim());
-    // Need at least 14 columns
-    if (cols.length < 14) continue;
-
-    const description = cols[9];
-
-    // Skip summary/totals rows
-    if (SKIP_PATTERNS.some((p) => description.includes(p))) continue;
-
-    // Parse account number
-    const account_no = parseInt(cols[0].replace(/\D/g, ""), 10);
-    if (isNaN(account_no) || account_no === 0) continue;
-
-    // Parse debit / credit
-    const debit  = parseMoney(cols[10]);
-    const credit = parseMoney(cols[11]);
-
-    // Skip rows with no transaction date and no activity (summary spacers)
-    const trx_date_raw = cols[3].trim();
-    if (!trx_date_raw && debit === 0 && credit === 0) continue;
-
-    // Normalise date: "MM/DD/YYYY" → "YYYY-MM-DD" or null
-    let trx_date: string | null = null;
-    if (trx_date_raw) {
-      const parts = trx_date_raw.split("/");
-      if (parts.length === 3) {
-        const [m, d, y] = parts;
-        trx_date = `${y.padStart(4, "20")}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
-      } else {
-        trx_date = trx_date_raw;
-      }
-    }
-
-    results.push({
-      account_no,
-      full_account_no: cols[2].trim(),
-      trx_date,
-      journal:       cols[4].trim(),
-      audit_no:      cols[5].trim(),
-      gl_trx_no:     cols[6].trim(),
-      line:          cols[7].trim(),
-      job:           cols[8].trim(),
-      description,
-      debit,
-      credit,
-      vendor_cust_no: cols[12].trim(),
-      trx_no:        cols[13].trim(),
-    });
-  }
-
-  return results;
 }
 
 // ─── Preview helpers ──────────────────────────────────────────────────────────
