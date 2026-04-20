@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import CSVImporter from "@/components/CSVImporter";
+import OverheadCSVImporter from "@/components/OverheadCSVImporter";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -521,8 +522,24 @@ export default function EnterWeekPage({
         </div>
       ) : (
         <div className="flex flex-col gap-5">
-          {/* CSV Import */}
+          {/* Full GL CSV Import */}
           <CSVImporter
+            weekEnding={date}
+            onImportComplete={() => {
+              setLoading(true);
+              loadBalances();
+            }}
+          />
+
+          {/* Divider */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px bg-gray-200" />
+            <span className="text-xs text-gray-400 whitespace-nowrap">Overhead (separate import)</span>
+            <div className="flex-1 h-px bg-gray-200" />
+          </div>
+
+          {/* DIV 99 Overhead GL Import */}
+          <OverheadCSVImporter
             weekEnding={date}
             onImportComplete={() => {
               setLoading(true);
