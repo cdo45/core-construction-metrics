@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type ParsedTransaction,
   type FilterStats,
@@ -56,10 +56,31 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
   const [importResult,    setImportResult]    = useState<ImportResult | null>(null);
   const [importError,     setImportError]     = useState("");
   const [confirmOverwrite, setConfirmOverwrite] = useState<OverwriteInfo | null>(null);
+  const [bsNos,           setBsNos]           = useState<Set<number>>(new Set());
+
+  // Fetch the balance-sheet account list once on mount so the preview can
+  // show in-scope vs out-of-scope counts before the user clicks Import.
+  useEffect(() => {
+    fetch("/api/gl-accounts/balance-sheet")
+      .then(async (r) => {
+        if (!r.ok) return;
+        const d = await r.json() as { account_nos: number[] };
+        setBsNos(new Set(d.account_nos));
+      })
+      .catch(() => {});
+  }, []);
 
   const uniqueAccounts = Array.from(
     new Set(transactions.map((t) => t.account_no)),
   ).sort((a, b) => a - b);
+
+  // Scope breakdown (only meaningful once bsNos is populated)
+  const bsLoaded        = bsNos.size > 0;
+  const inScopeAccounts = bsLoaded ? uniqueAccounts.filter((a) => bsNos.has(a)) : uniqueAccounts;
+  const outOfScopeCount = bsLoaded ? uniqueAccounts.length - inScopeAccounts.length : 0;
+  const inScopeRows     = bsLoaded
+    ? transactions.filter((t) => bsNos.has(t.account_no)).length
+    : transactions.length;
 
   // ── File handling ─────────────────────────────────────────────────────────
 
@@ -332,7 +353,17 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
         <div>
           <h2 className="text-sm font-semibold text-gray-900">CSV Preview</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {transactions.length} transactions · {uniqueAccounts.length} accounts found
+            {transactions.length.toLocaleString()} transactions ·{" "}
+            {bsLoaded ? (
+              <>
+                {inScopeAccounts.length} in-scope accounts
+                {outOfScopeCount > 0 && (
+                  <span className="text-amber-600"> · {outOfScopeCount} out-of-scope (will skip)</span>
+                )}
+              </>
+            ) : (
+              <>{uniqueAccounts.length} accounts found</>
+            )}
             {sourceFile ? ` · ${sourceFile}` : ""}
           </p>
         </div>
@@ -356,7 +387,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                 </svg>
-                Import {transactions.length} rows
+                Import {inScopeRows.toLocaleString()} rows
               </>
             )}
           </button>
@@ -382,7 +413,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
             <span>Skipped (blanks): <span className="font-medium text-gray-800">{filterStats.skipped_blank_spacers}</span></span>
             <span>Skipped (bad acct): <span className="font-medium text-gray-800">{filterStats.skipped_bad_account}</span></span>
             <span className="text-[#1B2A4A] font-medium">
-              Will import: {transactions.length} rows totaling {fmtMoney(netActivity)} net
+              Will import: {inScopeRows.toLocaleString()} rows{bsLoaded && outOfScopeCount > 0 ? ` (${(transactions.length - inScopeRows).toLocaleString()} out-of-scope skipped)` : ""}
             </span>
           </div>
         </div>
