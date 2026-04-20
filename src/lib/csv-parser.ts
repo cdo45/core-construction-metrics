@@ -1,19 +1,31 @@
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ParsedTransaction {
-  account_no:     number;
+  account_no:      number;
   full_account_no: string;
-  trx_date:       string | null;
-  journal:        string;
-  audit_no:       string;
-  gl_trx_no:      string;
-  line:           string;
-  job:            string;
-  description:    string;
-  debit:          number;
-  credit:         number;
-  vendor_cust_no: string;
-  trx_no:         string;
+  trx_date:        string | null;
+  journal:         string;
+  audit_no:        string;
+  gl_trx_no:       string;
+  line:            string;
+  job:             string;
+  description:     string;
+  debit:           number;
+  credit:          number;
+  vendor_cust_no:  string;
+  trx_no:          string;
+}
+
+export interface FilterStats {
+  parsed:                  number; // total non-empty data rows (after header)
+  skipped_subtotals:       number; // SKIP_PATTERNS matches
+  skipped_blank_spacers:   number; // no date + zero activity rows
+  skipped_bad_account:     number; // <14 cols or unparseable account_no
+}
+
+export interface ParseCSVResult {
+  transactions: ParsedTransaction[];
+  filter_stats: FilterStats;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -25,7 +37,7 @@ export const SKIP_PATTERNS = [
   "Ending Balance:",
 ];
 
-// Expected Foundation GL Activity export headers, normalized
+// Expected Foundation GL Activity export headers, normalised to lowercase + collapsed whitespace
 const EXPECTED_HEADERS = [
   "account no",
   "account desc",
@@ -80,30 +92,50 @@ export function parseCSVLine(line: string): string[] {
   return fields;
 }
 
-export function parseCSV(text: string): ParsedTransaction[] {
+export function parseCSV(text: string): ParseCSVResult {
   const lines = text.split(/\r?\n/);
-  const results: ParsedTransaction[] = [];
+  const transactions: ParsedTransaction[] = [];
+  const filter_stats: FilterStats = {
+    parsed:                0,
+    skipped_subtotals:     0,
+    skipped_blank_spacers: 0,
+    skipped_bad_account:   0,
+  };
 
   // Skip header row (index 0)
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
 
+    filter_stats.parsed++;
+
     const cols = parseCSVLine(line).map((c) => c.trim());
-    if (cols.length < 14) continue;
+    if (cols.length < 14) {
+      filter_stats.skipped_bad_account++;
+      continue;
+    }
 
     const description = cols[9];
 
-    if (SKIP_PATTERNS.some((p) => description.includes(p))) continue;
+    if (SKIP_PATTERNS.some((p) => description.includes(p))) {
+      filter_stats.skipped_subtotals++;
+      continue;
+    }
 
     const account_no = parseInt(cols[0].replace(/\D/g, ""), 10);
-    if (isNaN(account_no) || account_no === 0) continue;
+    if (isNaN(account_no) || account_no === 0) {
+      filter_stats.skipped_bad_account++;
+      continue;
+    }
 
     const debit  = parseMoney(cols[10]);
     const credit = parseMoney(cols[11]);
 
     const trx_date_raw = cols[3].trim();
-    if (!trx_date_raw && debit === 0 && credit === 0) continue;
+    if (!trx_date_raw && debit === 0 && credit === 0) {
+      filter_stats.skipped_blank_spacers++;
+      continue;
+    }
 
     let trx_date: string | null = null;
     if (trx_date_raw) {
@@ -116,55 +148,56 @@ export function parseCSV(text: string): ParsedTransaction[] {
       }
     }
 
-    results.push({
+    transactions.push({
       account_no,
       full_account_no: cols[2].trim(),
       trx_date,
-      journal:        cols[4].trim(),
-      audit_no:       cols[5].trim(),
-      gl_trx_no:      cols[6].trim(),
-      line:           cols[7].trim(),
-      job:            cols[8].trim(),
+      journal:         cols[4].trim(),
+      audit_no:        cols[5].trim(),
+      gl_trx_no:       cols[6].trim(),
+      line:            cols[7].trim(),
+      job:             cols[8].trim(),
       description,
       debit,
       credit,
-      vendor_cust_no: cols[12].trim(),
-      trx_no:         cols[13].trim(),
+      vendor_cust_no:  cols[12].trim(),
+      trx_no:          cols[13].trim(),
     });
   }
 
-  return results;
+  return { transactions, filter_stats };
 }
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
 /**
- * Validate that row 0 of the CSV looks like a Foundation GL Activity export.
- * Returns null if headers match (or drift by ≤2 columns).
- * Returns an error string if 3+ columns mismatch or the row is too short.
+ * Validate that the parsed header row looks like a Foundation GL Activity export.
+ * Returns null when headers match or differ by ≤2 columns (allows minor format drift).
+ * Returns an error string when 3+ columns mismatch or the row is too short.
  */
 export function validateFoundationHeaders(row0cols: string[]): string | null {
   if (row0cols.length < 14) {
     return `Not a Foundation GL export (expected 14 columns, got ${row0cols.length})`;
   }
 
-  const mismatches = EXPECTED_HEADERS.reduce((count, expected, i) => {
-    return normalizeHeader(row0cols[i]) === expected ? count : count + 1;
-  }, 0);
-
-  if (mismatches >= 3) {
-    return "Not a Foundation GL export (header mismatch)";
+  let mismatches = 0;
+  for (let i = 0; i < EXPECTED_HEADERS.length; i++) {
+    if (normalizeHeader(row0cols[i]) !== EXPECTED_HEADERS[i]) mismatches++;
   }
 
-  return null;
+  return mismatches >= 3 ? "Not a Foundation GL export (header mismatch)" : null;
 }
 
 /**
  * Return the fraction (0–1) of transactions whose full_account_no ends with "99".
  * Returns 0 for an empty array.
  */
-export function detectDivision99Percentage(transactions: ParsedTransaction[]): number {
+export function detectDivision99Percentage(
+  transactions: { full_account_no: string }[],
+): number {
   if (transactions.length === 0) return 0;
-  const count = transactions.filter((t) => t.full_account_no.trim().endsWith("99")).length;
+  const count = transactions.filter((t) =>
+    t.full_account_no.trim().endsWith("99"),
+  ).length;
   return count / transactions.length;
 }

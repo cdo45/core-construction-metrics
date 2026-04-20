@@ -3,16 +3,25 @@
 import { useRef, useState } from "react";
 import {
   type ParsedTransaction,
+  type FilterStats,
   parseCSV,
+  parseCSVLine,
+  validateFoundationHeaders,
 } from "@/lib/csv-parser";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ImportResult {
-  imported_count: number;
+  imported_count:    number;
   accounts_affected: number;
-  skipped_accounts: number[];
-  week_ending: string;
+  skipped_accounts:  number[];
+  week_ending:       string;
+  warnings:          string[];
+}
+
+interface OverwriteInfo {
+  row_count:   number;
+  total_debit: number;
 }
 
 // ─── Preview helpers ──────────────────────────────────────────────────────────
@@ -20,8 +29,8 @@ interface ImportResult {
 function fmtMoney(n: number): string {
   if (!isFinite(n)) return "—";
   return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
+    style:                 "currency",
+    currency:              "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n);
@@ -30,7 +39,7 @@ function fmtMoney(n: number): string {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
-  weekEnding: string;
+  weekEnding:       string;
   onImportComplete: () => void;
 }
 
@@ -38,22 +47,27 @@ type Stage = "idle" | "parsed" | "importing" | "done";
 
 export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
-  const [stage, setStage] = useState<Stage>("idle");
-  const [parseError, setParseError] = useState("");
-  const [transactions, setTransactions] = useState<ParsedTransaction[]>([]);
-  const [importResult, setImportResult] = useState<ImportResult | null>(null);
-  const [importError, setImportError] = useState("");
+  const [dragging,        setDragging]        = useState(false);
+  const [stage,           setStage]           = useState<Stage>("idle");
+  const [parseError,      setParseError]      = useState("");
+  const [transactions,    setTransactions]    = useState<ParsedTransaction[]>([]);
+  const [filterStats,     setFilterStats]     = useState<FilterStats | null>(null);
+  const [sourceFile,      setSourceFile]      = useState("");
+  const [importResult,    setImportResult]    = useState<ImportResult | null>(null);
+  const [importError,     setImportError]     = useState("");
+  const [confirmOverwrite, setConfirmOverwrite] = useState<OverwriteInfo | null>(null);
 
-  // Unique account nos after parsing
   const uniqueAccounts = Array.from(
-    new Set(transactions.map((t) => t.account_no))
+    new Set(transactions.map((t) => t.account_no)),
   ).sort((a, b) => a - b);
+
+  // ── File handling ─────────────────────────────────────────────────────────
 
   function handleFile(file: File) {
     setParseError("");
     setImportError("");
     setImportResult(null);
+    setConfirmOverwrite(null);
 
     if (!file.name.toLowerCase().endsWith(".csv")) {
       setParseError("Please select a CSV file.");
@@ -64,12 +78,27 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
     reader.onload = (e) => {
       try {
         const text = e.target?.result as string;
-        const parsed = parseCSV(text);
+
+        // Validate header row before parsing
+        const lines      = text.split(/\r?\n/);
+        const headerLine = lines[0]?.trim() ?? "";
+        if (headerLine) {
+          const headerCols = parseCSVLine(headerLine).map((c) => c.trim());
+          const headerErr  = validateFoundationHeaders(headerCols);
+          if (headerErr) {
+            setParseError(headerErr);
+            return;
+          }
+        }
+
+        const { transactions: parsed, filter_stats } = parseCSV(text);
         if (parsed.length === 0) {
           setParseError("No valid transaction rows found in this CSV.");
           return;
         }
         setTransactions(parsed);
+        setFilterStats(filter_stats);
+        setSourceFile(file.name);
         setStage("parsed");
       } catch (err) {
         setParseError(`Parse error: ${String(err)}`);
@@ -89,18 +118,41 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
-    // Reset so same file can be re-selected
     e.target.value = "";
   }
 
+  // ── Import flow ───────────────────────────────────────────────────────────
+
+  // Called from the preview header button; checks for existing data first.
+  async function handleCheckAndImport() {
+    try {
+      const res  = await fetch(`/api/weeks/${weekEnding}/import-status?type=full_gl`);
+      const data = await res.json();
+      if (data.exists) {
+        setConfirmOverwrite({ row_count: data.row_count, total_debit: data.total_debit });
+        return;
+      }
+    } catch {
+      // If the status check fails, proceed with import anyway.
+    }
+    await handleImport();
+  }
+
+  // Fires the actual POST. Can be called directly (after overwrite confirm) or
+  // via handleCheckAndImport.
   async function handleImport() {
+    setConfirmOverwrite(null);
     setStage("importing");
     setImportError("");
     try {
       const res = await fetch("/api/import", {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ week_ending: weekEnding, transactions }),
+        body:    JSON.stringify({
+          week_ending:  weekEnding,
+          transactions,
+          source_file:  sourceFile || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -120,12 +172,15 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
   function handleReset() {
     setStage("idle");
     setTransactions([]);
+    setFilterStats(null);
+    setSourceFile("");
     setImportResult(null);
     setParseError("");
     setImportError("");
+    setConfirmOverwrite(null);
   }
 
-  // ── Render: idle / error ──────────────────────────────────────────────────
+  // ── Render: idle ──────────────────────────────────────────────────────────
 
   if (stage === "idle") {
     return (
@@ -159,28 +214,17 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
         >
           <svg
             className={`w-10 h-10 ${dragging ? "text-[#1B2A4A]" : "text-gray-400"}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
           <div className="text-center">
-            <p className="text-sm font-medium text-gray-700">
-              Drop Foundation GL Activity CSV here
-            </p>
+            <p className="text-sm font-medium text-gray-700">Drop Foundation GL Activity CSV here</p>
             <p className="text-xs text-gray-400 mt-1">or click to browse</p>
           </div>
         </div>
 
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv"
-          className="hidden"
-          onChange={handleInputChange}
-        />
+        <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleInputChange} />
       </div>
     );
   }
@@ -207,48 +251,95 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
               </p>
             </div>
           </div>
-          <button onClick={handleReset} className="btn-secondary text-xs">
-            Import another
-          </button>
+          <button onClick={handleReset} className="btn-secondary text-xs">Import another</button>
         </div>
+
         {importResult.skipped_accounts.length > 0 && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-xs font-medium text-amber-800 mb-1">
-              Skipped accounts (not in GL setup):
-            </p>
-            <p className="text-xs text-amber-700 font-mono">
-              {importResult.skipped_accounts.join(", ")}
-            </p>
+            <p className="text-xs font-medium text-amber-800 mb-1">Skipped accounts (not in GL setup):</p>
+            <p className="text-xs text-amber-700 font-mono">{importResult.skipped_accounts.join(", ")}</p>
+          </div>
+        )}
+
+        {importResult.warnings && importResult.warnings.length > 0 && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-xs font-medium text-amber-800 mb-1.5">Warnings:</p>
+            <ul className="flex flex-col gap-1">
+              {importResult.warnings.map((w, i) => (
+                <li key={i} className="flex items-start gap-1.5 text-xs text-amber-700">
+                  <span className="mt-0.5 flex-shrink-0">•</span>
+                  {w}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
     );
   }
 
-  // ── Render: parsed preview ────────────────────────────────────────────────
+  // ── Render: parsed / importing ────────────────────────────────────────────
 
-  const preview = transactions.slice(0, 20);
-  const totalDebits  = transactions.reduce((s, t) => s + t.debit, 0);
+  const preview      = transactions.slice(0, 20);
+  const totalDebits  = transactions.reduce((s, t) => s + t.debit,  0);
   const totalCredits = transactions.reduce((s, t) => s + t.credit, 0);
+  const netActivity  = totalDebits - totalCredits;
 
   return (
-    <div className="card overflow-hidden">
+    <div className="card overflow-hidden relative">
+
+      {/* ── Overwrite confirmation modal ─────────────────────────────────── */}
+      {confirmOverwrite && (
+        <div className="absolute inset-0 z-10 bg-white/90 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="bg-white rounded-xl border border-amber-300 shadow-lg max-w-sm w-full p-5">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex-shrink-0 w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center">
+                <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Replace existing data?</p>
+                <p className="text-xs text-gray-600 mt-1">
+                  This week already has{" "}
+                  <span className="font-medium">{confirmOverwrite.row_count.toLocaleString()} imported transactions</span>{" "}
+                  totaling{" "}
+                  <span className="font-medium">{fmtMoney(confirmOverwrite.total_debit)}</span>.
+                  Re-importing will replace them.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConfirmOverwrite(null)}
+                className="btn-secondary text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleImport}
+                className="btn-primary text-xs"
+              >
+                Confirm replacement
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Preview header */}
       <div className="px-5 py-3 border-b border-gray-200 flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-gray-900">
-            CSV Preview
-          </h2>
+          <h2 className="text-sm font-semibold text-gray-900">CSV Preview</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {transactions.length} transactions · {uniqueAccounts.length} accounts found
+            {sourceFile ? ` · ${sourceFile}` : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleReset} className="btn-secondary text-xs">
-            Clear
-          </button>
+          <button onClick={handleReset} className="btn-secondary text-xs">Clear</button>
           <button
-            onClick={handleImport}
+            onClick={handleCheckAndImport}
             disabled={stage === "importing"}
             className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-60"
           >
@@ -281,7 +372,23 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
         </div>
       )}
 
-      {/* Stats row */}
+      {/* Filter breakdown */}
+      {filterStats && (
+        <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 text-xs">
+          <p className="font-medium text-gray-700 mb-1.5">Parse breakdown</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-1 text-gray-500">
+            <span>Parsed: <span className="font-medium text-gray-800">{filterStats.parsed}</span></span>
+            <span>Skipped (subtotals): <span className="font-medium text-gray-800">{filterStats.skipped_subtotals}</span></span>
+            <span>Skipped (blanks): <span className="font-medium text-gray-800">{filterStats.skipped_blank_spacers}</span></span>
+            <span>Skipped (bad acct): <span className="font-medium text-gray-800">{filterStats.skipped_bad_account}</span></span>
+            <span className="text-[#1B2A4A] font-medium">
+              Will import: {transactions.length} rows totaling {fmtMoney(netActivity)} net
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Totals row */}
       <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 grid grid-cols-3 gap-4 text-xs">
         <div>
           <p className="text-gray-500">Total Debits</p>
@@ -320,7 +427,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
                 <td className="table-td text-gray-500">{t.job}</td>
                 <td className="table-td text-gray-800 max-w-[200px] truncate">{t.description}</td>
                 <td className="table-td text-right tabular-nums text-gray-700">
-                  {t.debit > 0 ? fmtMoney(t.debit) : ""}
+                  {t.debit  > 0 ? fmtMoney(t.debit)  : ""}
                 </td>
                 <td className="table-td text-right tabular-nums text-gray-700">
                   {t.credit > 0 ? fmtMoney(t.credit) : ""}
