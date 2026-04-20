@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import CSVImporter from "@/components/CSVImporter";
 import OverheadCSVImporter from "@/components/OverheadCSVImporter";
+import OverheadCategoryCard, { type OverheadRow } from "@/components/OverheadCategoryCard";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -236,6 +237,8 @@ export default function EnterWeekPage({
   const [accounts, setAccounts] = useState<BalanceRow[]>([]);
   const [balanceMap, setBalanceMap] = useState<BalanceMap>({});
   const [categoryGroups, setCategoryGroups] = useState<CategoryGroup[]>([]);
+  const [overheadRows, setOverheadRows] = useState<OverheadRow[]>([]);
+  const [overheadVersion, setOverheadVersion] = useState(0);
 
   const [bids, setBids] = useState<BidFormState>({
     bids_submitted_count: "",
@@ -293,13 +296,27 @@ export default function EnterWeekPage({
     []
   );
 
+  const loadOverhead = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/weekly-overhead?week_ending=${date}`);
+      if (res.ok) {
+        const data = await res.json() as { accounts?: OverheadRow[] };
+        setOverheadRows(data.accounts ?? []);
+        setOverheadVersion((v) => v + 1);
+      }
+    } catch {
+      // silently ignore
+    }
+  }, [date]);
+
   const loadBalances = useCallback(async () => {
     try {
-      const [curRes, priorRes, bidRes, noteRes] = await Promise.all([
+      const [curRes, priorRes, bidRes, noteRes, overheadRes] = await Promise.all([
         fetch(`/api/weekly-balances?week_ending=${date}`),
         fetch(`/api/weekly-balances?week_ending=${date}&prior=1`),
         fetch(`/api/bid-activity?week_ending=${date}`),
         fetch(`/api/weekly-notes?week_ending=${date}`),
+        fetch(`/api/weekly-overhead?week_ending=${date}`),
       ]);
 
       const curData = curRes.ok ? await curRes.json() : { balances: [] };
@@ -336,6 +353,12 @@ export default function EnterWeekPage({
         if (noteData) {
           setNotes({ doc_link: noteData.doc_link ?? "", summary: noteData.summary ?? "" });
         }
+      }
+
+      if (overheadRes.ok) {
+        const overheadData = await overheadRes.json() as { accounts?: OverheadRow[] };
+        setOverheadRows(overheadData.accounts ?? []);
+        setOverheadVersion((v) => v + 1);
       }
     } finally {
       setLoading(false);
@@ -545,6 +568,14 @@ export default function EnterWeekPage({
               setLoading(true);
               loadBalances();
             }}
+          />
+
+          {/* Overhead manual entry */}
+          <OverheadCategoryCard
+            key={overheadVersion}
+            rows={overheadRows}
+            weekEnding={date}
+            onSaveComplete={loadOverhead}
           />
 
           {/* Balance entry sections by category */}
