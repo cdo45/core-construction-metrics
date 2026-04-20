@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import type { WeeklyReportData, ReportCategory, ReportRatios } from "@/app/api/weekly-report/route";
+import type {
+  WeeklyReportData,
+  ReportCategory,
+  ReportRatios,
+  OverheadSummary,
+} from "@/app/api/weekly-report/route";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -134,13 +139,20 @@ function ExecutiveSummary({ data }: { data: WeeklyReportData }) {
 
 // ─── Section: Category Movement Table ────────────────────────────────────────
 
+type SortMode = "account" | "change";
+
 function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrior: boolean }) {
   const [open, setOpen] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>("account");
 
   // Determine which accounts changed
   const changedAccounts = cat.accounts.filter((a) => a.change !== 0);
-  const displayAccounts = showAll ? cat.accounts : changedAccounts;
+  const baseAccounts = showAll ? cat.accounts : changedAccounts;
+  const displayAccounts =
+    sortMode === "change"
+      ? [...baseAccounts].sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+      : baseAccounts; // already account_no ASC from the API
   const hasChanges = changedAccounts.length > 0;
 
   // For "favorable" coloring: cash up = good; AR up = good; AP up = bad; payroll up = bad
@@ -278,21 +290,125 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
             </table>
           </div>
 
-          {/* Toggle show all / changes only */}
-          {hasChanges && cat.accounts.length > changedAccounts.length && (
-            <div className="px-5 py-2 border-t border-gray-100">
-              <button
-                onClick={() => setShowAll((s) => !s)}
-                className="text-xs text-[#1B2A4A] hover:underline font-medium"
-              >
-                {showAll
-                  ? "Show changes only"
-                  : `Show all ${cat.accounts.length} accounts`}
-              </button>
+          {/* Footer controls: show-all toggle + sort toggle */}
+          <div className="px-5 py-2 border-t border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              {hasChanges && cat.accounts.length > changedAccounts.length && (
+                <button
+                  onClick={() => setShowAll((s) => !s)}
+                  className="text-xs text-[#1B2A4A] hover:underline font-medium"
+                >
+                  {showAll
+                    ? "Show changes only"
+                    : `Show all ${cat.accounts.length} accounts`}
+                </button>
+              )}
             </div>
-          )}
+            {hasPrior && displayAccounts.length > 1 && (
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>Sort:</span>
+                <button
+                  onClick={() => setSortMode("account")}
+                  className={`px-2 py-0.5 rounded ${
+                    sortMode === "account"
+                      ? "bg-[#1B2A4A] text-white font-medium"
+                      : "text-[#1B2A4A] hover:bg-gray-100"
+                  }`}
+                >
+                  Account #
+                </button>
+                <button
+                  onClick={() => setSortMode("change")}
+                  className={`px-2 py-0.5 rounded ${
+                    sortMode === "change"
+                      ? "bg-[#1B2A4A] text-white font-medium"
+                      : "text-[#1B2A4A] hover:bg-gray-100"
+                  }`}
+                >
+                  Change ($)
+                </button>
+              </div>
+            )}
+          </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Section: Overhead Movement Row ──────────────────────────────────────────
+
+function OverheadMovementRow({
+  summary,
+  hasPrior,
+}: {
+  summary:  OverheadSummary;
+  hasPrior: boolean;
+}) {
+  const OVERHEAD_COLOR = "#7B3FA0";
+  // Overhead is a cost category — higher spend is unfavorable
+  const changeColor =
+    summary.change === 0
+      ? "text-gray-400"
+      : summary.change > 0
+      ? "text-red-600"
+      : "text-green-600";
+
+  return (
+    <div className="card overflow-hidden">
+      <div
+        className="flex items-center justify-between px-5 py-3"
+        style={{ backgroundColor: OVERHEAD_COLOR }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-sm text-white">
+            Overhead (Div 99)
+          </span>
+          {hasPrior && summary.change !== 0 && (
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/20 text-white">
+              {fmtPct(summary.change_pct)}
+            </span>
+          )}
+        </div>
+        <span className="text-sm font-bold text-white">
+          {fmtMoneyShort(summary.current_net)}
+        </span>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-gray-100">
+        <div className="px-5 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+            Net This Week
+          </p>
+          <p className="text-sm font-bold text-gray-900 tabular-nums mt-0.5">
+            {fmtMoney(summary.current_net)}
+          </p>
+        </div>
+        <div className="px-5 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+            Net Prior Week
+          </p>
+          <p className="text-sm font-semibold text-gray-700 tabular-nums mt-0.5">
+            {hasPrior ? fmtMoney(summary.prior_net) : "—"}
+          </p>
+        </div>
+        <div className="px-5 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+            Change (WoW)
+          </p>
+          <p className={`text-sm font-semibold tabular-nums mt-0.5 ${changeColor}`}>
+            {hasPrior ? (
+              <>
+                {fmtMoney(summary.change)}{" "}
+                <span className="text-xs opacity-70">
+                  ({fmtPct(summary.change_pct)})
+                </span>
+              </>
+            ) : (
+              "—"
+            )}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -694,6 +810,12 @@ export default function WeeklyReport({ data }: { data: WeeklyReportData }) {
           {data.categories.map((cat) => (
             <CategoryMovementTable key={cat.name} cat={cat} hasPrior={hasPrior} />
           ))}
+          {data.overhead_summary && (
+            <OverheadMovementRow
+              summary={data.overhead_summary}
+              hasPrior={hasPrior}
+            />
+          )}
         </div>
       </div>
 

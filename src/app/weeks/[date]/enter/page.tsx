@@ -570,14 +570,6 @@ export default function EnterWeekPage({
             }}
           />
 
-          {/* Overhead manual entry */}
-          <OverheadCategoryCard
-            key={overheadVersion}
-            rows={overheadRows}
-            weekEnding={date}
-            onSaveComplete={loadOverhead}
-          />
-
           {/* Balance entry sections by category */}
           {categoryGroups.map((g) => (
             <CategoryEnterSection
@@ -587,6 +579,14 @@ export default function EnterWeekPage({
               onBalanceChange={handleBalanceChange}
             />
           ))}
+
+          {/* Overhead manual entry — rendered below balance-sheet categories */}
+          <OverheadCategoryCard
+            key={overheadVersion}
+            rows={overheadRows}
+            weekEnding={date}
+            onSaveComplete={loadOverhead}
+          />
 
           {/* Bid Activity */}
           <div className="card">
