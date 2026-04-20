@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import {
   type ParsedTransaction,
   type FilterStats,
@@ -11,17 +12,19 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ImportResult {
-  imported_count:    number;
-  accounts_affected: number;
-  skipped_accounts:  number[];
-  week_ending:       string;
-  warnings:          string[];
+interface OverheadImportResult {
+  imported_count:            number;
+  total_debit:               number;
+  total_credit:              number;
+  net_total:                 number;
+  excluded_ye_reclass_total: number;
+  unknown_accounts:          Array<{ account_no: number; net_activity: number }>;
+  warnings:                  string[];
 }
 
 interface OverwriteInfo {
-  row_count:   number;
-  total_debit: number;
+  row_count: number;
+  net_total: number;
 }
 
 // ─── Preview helpers ──────────────────────────────────────────────────────────
@@ -45,16 +48,16 @@ interface Props {
 
 type Stage = "idle" | "parsed" | "importing" | "done";
 
-export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
+export default function OverheadCSVImporter({ weekEnding, onImportComplete }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [dragging,        setDragging]        = useState(false);
-  const [stage,           setStage]           = useState<Stage>("idle");
-  const [parseError,      setParseError]      = useState("");
-  const [transactions,    setTransactions]    = useState<ParsedTransaction[]>([]);
-  const [filterStats,     setFilterStats]     = useState<FilterStats | null>(null);
-  const [sourceFile,      setSourceFile]      = useState("");
-  const [importResult,    setImportResult]    = useState<ImportResult | null>(null);
-  const [importError,     setImportError]     = useState("");
+  const [dragging,         setDragging]         = useState(false);
+  const [stage,            setStage]            = useState<Stage>("idle");
+  const [parseError,       setParseError]       = useState("");
+  const [transactions,     setTransactions]     = useState<ParsedTransaction[]>([]);
+  const [filterStats,      setFilterStats]      = useState<FilterStats | null>(null);
+  const [sourceFile,       setSourceFile]       = useState("");
+  const [importResult,     setImportResult]     = useState<OverheadImportResult | null>(null);
+  const [importError,      setImportError]      = useState("");
   const [confirmOverwrite, setConfirmOverwrite] = useState<OverwriteInfo | null>(null);
 
   const uniqueAccounts = Array.from(
@@ -123,29 +126,29 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
 
   // ── Import flow ───────────────────────────────────────────────────────────
 
-  // Called from the preview header button; checks for existing data first.
   async function handleCheckAndImport() {
     try {
-      const res  = await fetch(`/api/weeks/${weekEnding}/import-status?type=full_gl`);
+      const res  = await fetch(`/api/weeks/${weekEnding}/import-status?type=overhead`);
       const data = await res.json();
       if (data.exists) {
-        setConfirmOverwrite({ row_count: data.row_count, total_debit: data.total_debit });
+        setConfirmOverwrite({
+          row_count: data.row_count,
+          net_total: (data.total_debit ?? 0) - (data.total_credit ?? 0),
+        });
         return;
       }
     } catch {
-      // If the status check fails, proceed with import anyway.
+      // Status check failed — proceed with import anyway.
     }
     await handleImport();
   }
 
-  // Fires the actual POST. Can be called directly (after overwrite confirm) or
-  // via handleCheckAndImport.
   async function handleImport() {
     setConfirmOverwrite(null);
     setStage("importing");
     setImportError("");
     try {
-      const res = await fetch("/api/import", {
+      const res = await fetch("/api/import-overhead", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
@@ -160,7 +163,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
         setStage("parsed");
         return;
       }
-      setImportResult(data as ImportResult);
+      setImportResult(data as OverheadImportResult);
       setStage("done");
       onImportComplete();
     } catch (err) {
@@ -186,8 +189,8 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
     return (
       <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-900">Import Foundation GL CSV</h2>
-          <span className="text-xs text-gray-400">Optional — or enter balances manually below</span>
+          <h2 className="text-sm font-semibold text-gray-900">DIV 99 Overhead GL Import</h2>
+          <span className="text-xs text-gray-400">Optional — tracks weekly overhead activity</span>
         </div>
 
         {parseError && (
@@ -208,18 +211,18 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
             flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed
             cursor-pointer py-10 transition-colors select-none
             ${dragging
-              ? "border-[#1B2A4A] bg-blue-50"
-              : "border-gray-300 bg-gray-50 hover:border-[#1B2A4A] hover:bg-blue-50"}
+              ? "border-[#E67E22] bg-orange-50"
+              : "border-gray-300 bg-gray-50 hover:border-[#E67E22] hover:bg-orange-50"}
           `}
         >
           <svg
-            className={`w-10 h-10 ${dragging ? "text-[#1B2A4A]" : "text-gray-400"}`}
+            className={`w-10 h-10 ${dragging ? "text-[#E67E22]" : "text-gray-400"}`}
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
           <div className="text-center">
-            <p className="text-sm font-medium text-gray-700">Drop Foundation GL Activity CSV here</p>
+            <p className="text-sm font-medium text-gray-700">Drop DIV 99 Overhead GL Activity CSV here</p>
             <p className="text-xs text-gray-400 mt-1">or click to browse</p>
           </div>
         </div>
@@ -242,22 +245,51 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
               </svg>
             </div>
             <div>
-              <p className="text-sm font-semibold text-gray-900">Import complete</p>
+              <p className="text-sm font-semibold text-gray-900">Overhead import complete</p>
               <p className="text-xs text-gray-500">
-                {importResult.imported_count} transactions · {importResult.accounts_affected} accounts updated
-                {importResult.skipped_accounts.length > 0
-                  ? ` · ${importResult.skipped_accounts.length} accounts skipped`
-                  : ""}
+                {importResult.imported_count} overhead account{importResult.imported_count === 1 ? "" : "s"}{" "}
+                · {fmtMoney(importResult.net_total)} net activity
               </p>
             </div>
           </div>
           <button onClick={handleReset} className="btn-secondary text-xs">Import another</button>
         </div>
 
-        {importResult.skipped_accounts.length > 0 && (
+        {importResult.excluded_ye_reclass_total > 0 && (
+          <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-2">
+            <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-xs text-blue-700">
+              Excluded{" "}
+              <span className="font-medium">{fmtMoney(importResult.excluded_ye_reclass_total)}</span>
+              {" "}in year-end reclass entries — not included in weekly totals.
+            </p>
+          </div>
+        )}
+
+        {importResult.unknown_accounts.length > 0 && (
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-            <p className="text-xs font-medium text-amber-800 mb-1">Skipped accounts (not in GL setup):</p>
-            <p className="text-xs text-amber-700 font-mono">{importResult.skipped_accounts.join(", ")}</p>
+            <p className="text-xs font-medium text-amber-800 mb-1.5">
+              {importResult.unknown_accounts.length} account{importResult.unknown_accounts.length === 1 ? "" : "s"} had activity but aren&apos;t in Setup:
+            </p>
+            <ul className="flex flex-col gap-0.5 mb-2">
+              {importResult.unknown_accounts.map((a) => (
+                <li key={a.account_no} className="text-xs text-amber-700 font-mono">
+                  {a.account_no}
+                  <span className="font-sans ml-2 text-amber-600">{fmtMoney(a.net_activity)} net</span>
+                </li>
+              ))}
+            </ul>
+            <Link
+              href="/setup"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[#1B2A4A] hover:underline"
+            >
+              Add to Setup
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
           </div>
         )}
 
@@ -299,27 +331,21 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
                 </svg>
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">Replace existing data?</p>
+                <p className="text-sm font-semibold text-gray-900">Replace existing overhead data?</p>
                 <p className="text-xs text-gray-600 mt-1">
                   This week already has{" "}
-                  <span className="font-medium">{confirmOverwrite.row_count.toLocaleString()} imported transactions</span>{" "}
-                  totaling{" "}
-                  <span className="font-medium">{fmtMoney(confirmOverwrite.total_debit)}</span>.
-                  Re-importing will replace them.
+                  <span className="font-medium">{confirmOverwrite.row_count} overhead account{confirmOverwrite.row_count === 1 ? "" : "s"} imported</span>{" "}
+                  with{" "}
+                  <span className="font-medium">{fmtMoney(confirmOverwrite.net_total)} net activity</span>.
+                  Re-importing will replace them. Continue?
                 </p>
               </div>
             </div>
             <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setConfirmOverwrite(null)}
-                className="btn-secondary text-xs"
-              >
+              <button onClick={() => setConfirmOverwrite(null)} className="btn-secondary text-xs">
                 Cancel
               </button>
-              <button
-                onClick={handleImport}
-                className="btn-primary text-xs"
-              >
+              <button onClick={handleImport} className="btn-primary text-xs">
                 Confirm replacement
               </button>
             </div>
@@ -330,7 +356,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
       {/* Preview header */}
       <div className="px-5 py-3 border-b border-gray-200 flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-gray-900">CSV Preview</h2>
+          <h2 className="text-sm font-semibold text-gray-900">DIV 99 Overhead — CSV Preview</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {transactions.length} transactions · {uniqueAccounts.length} accounts found
             {sourceFile ? ` · ${sourceFile}` : ""}
@@ -342,6 +368,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
             onClick={handleCheckAndImport}
             disabled={stage === "importing"}
             className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-60"
+            style={{ backgroundColor: "#E67E22", borderColor: "#E67E22" }}
           >
             {stage === "importing" ? (
               <>
@@ -381,7 +408,7 @@ export default function CSVImporter({ weekEnding, onImportComplete }: Props) {
             <span>Skipped (subtotals): <span className="font-medium text-gray-800">{filterStats.skipped_subtotals}</span></span>
             <span>Skipped (blanks): <span className="font-medium text-gray-800">{filterStats.skipped_blank_spacers}</span></span>
             <span>Skipped (bad acct): <span className="font-medium text-gray-800">{filterStats.skipped_bad_account}</span></span>
-            <span className="text-[#1B2A4A] font-medium">
+            <span className="text-[#E67E22] font-medium">
               Will import: {transactions.length} rows totaling {fmtMoney(netActivity)} net
             </span>
           </div>

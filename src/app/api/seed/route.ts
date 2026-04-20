@@ -42,25 +42,14 @@ export async function POST() {
       )
     `;
 
-    // Safety: if the table was previously created with wrong column types (e.g.
-    // INTEGER or unscaled NUMERIC), coerce them to NUMERIC(15,2) now.
-    // This is idempotent — altering a NUMERIC(15,2) column to NUMERIC(15,2) is
-    // a no-op in Postgres.
+    // Safety: coerce balance columns to NUMERIC(15,2) for DBs created before
+    // the type was explicit. Altering NUMERIC(15,2) → NUMERIC(15,2) is a no-op.
     await sql`
       ALTER TABLE weekly_balances
         ALTER COLUMN beg_balance TYPE NUMERIC(15,2)
           USING beg_balance::NUMERIC(15,2),
         ALTER COLUMN end_balance TYPE NUMERIC(15,2)
           USING end_balance::NUMERIC(15,2)
-    `;
-
-    // Same safety ALTER for bid_activity value columns.
-    await sql`
-      ALTER TABLE bid_activity
-        ALTER COLUMN bids_submitted_value TYPE NUMERIC(15,2)
-          USING bids_submitted_value::NUMERIC(15,2),
-        ALTER COLUMN bids_won_value TYPE NUMERIC(15,2)
-          USING bids_won_value::NUMERIC(15,2)
     `;
 
     // Create bid_activity table
@@ -77,6 +66,15 @@ export async function POST() {
       )
     `;
 
+    // Safety: same column-type coercion for DBs seeded before explicit NUMERIC.
+    await sql`
+      ALTER TABLE bid_activity
+        ALTER COLUMN bids_submitted_value TYPE NUMERIC(15,2)
+          USING bids_submitted_value::NUMERIC(15,2),
+        ALTER COLUMN bids_won_value TYPE NUMERIC(15,2)
+          USING bids_won_value::NUMERIC(15,2)
+    `;
+
     // Create weekly_notes table
     await sql`
       CREATE TABLE IF NOT EXISTS weekly_notes (
@@ -88,7 +86,7 @@ export async function POST() {
       )
     `;
 
-    // Create weekly_transactions table (Foundation GL import)
+    // Create weekly_transactions table (Foundation Full GL import)
     await sql`
       CREATE TABLE IF NOT EXISTS weekly_transactions (
         id              SERIAL PRIMARY KEY,
@@ -116,14 +114,61 @@ export async function POST() {
       CREATE INDEX IF NOT EXISTS idx_wt_account ON weekly_transactions(gl_account_id)
     `;
 
-    // Insert default categories only if a row with that name doesn't already exist.
-    // Using WHERE NOT EXISTS instead of ON CONFLICT because categories has no
-    // unique constraint on name — this keeps the insert fully idempotent.
+    // Create weekly_overhead_spend table (Foundation Div 99 overhead import)
+    await sql`
+      CREATE TABLE IF NOT EXISTS weekly_overhead_spend (
+        id                        SERIAL PRIMARY KEY,
+        week_ending               DATE          NOT NULL,
+        gl_account_id             INT           NOT NULL REFERENCES gl_accounts(id),
+        division                  VARCHAR(10)   NOT NULL DEFAULT '99',
+        weekly_debit              NUMERIC(15,2) NOT NULL DEFAULT 0,
+        weekly_credit             NUMERIC(15,2) NOT NULL DEFAULT 0,
+        net_activity              NUMERIC(15,2) NOT NULL DEFAULT 0,
+        excluded_ye_reclass_gross NUMERIC(15,2) NOT NULL DEFAULT 0,
+        source_file               VARCHAR(255),
+        created_at                TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+        UNIQUE (week_ending, gl_account_id, division)
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_wos_week    ON weekly_overhead_spend(week_ending)
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_wos_account ON weekly_overhead_spend(gl_account_id)
+    `;
+
+    // Create import_log table (audit trail for every import attempt)
+    await sql`
+      CREATE TABLE IF NOT EXISTS import_log (
+        id            SERIAL       PRIMARY KEY,
+        import_type   VARCHAR(20)  NOT NULL CHECK (import_type IN ('full_gl', 'overhead')),
+        week_ending   DATE         NOT NULL,
+        status        VARCHAR(10)  NOT NULL CHECK (status IN ('success', 'failed')),
+        rows_imported INT          NOT NULL DEFAULT 0,
+        total_debit   NUMERIC(15,2),
+        total_credit  NUMERIC(15,2),
+        net_total     NUMERIC(15,2),
+        warnings      JSONB,
+        error_message TEXT,
+        source_file   VARCHAR(255),
+        created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_il_week ON import_log(week_ending)
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_il_type ON import_log(import_type)
+    `;
+
+    // ── Seed default categories ───────────────────────────────────────────────
+    // WHERE NOT EXISTS keeps this idempotent (categories has no UNIQUE on name).
     const defaultCategories = [
       { name: "Cash on Hand",        sort_order: 1, color: "#548235" },
       { name: "Who Owes Us",         sort_order: 2, color: "#4472C4" },
       { name: "Who We Owe",          sort_order: 3, color: "#C00000" },
       { name: "Payroll Liabilities", sort_order: 4, color: "#ED7D31" },
+      { name: "Overhead (Div 99)",   sort_order: 5, color: "#E67E22" },
     ];
 
     for (const cat of defaultCategories) {
@@ -132,6 +177,43 @@ export async function POST() {
         SELECT ${cat.name}, ${cat.sort_order}, ${cat.color}
         WHERE NOT EXISTS (
           SELECT 1 FROM categories WHERE name = ${cat.name}
+        )
+      `;
+    }
+
+    // ── Seed default GL accounts ──────────────────────────────────────────────
+    // category_id resolved by name so this is independent of insertion order.
+    const defaultAccounts = [
+      {
+        account_no: 1290,
+        description: "COSTS IN EXCESS",
+        normal_balance: "debit",
+        category: "Who Owes Us",
+      },
+      {
+        account_no: 2030,
+        description: "BILLINGS IN EXCESS",
+        normal_balance: "credit",
+        category: "Who We Owe",
+      },
+      {
+        account_no: 2600,
+        description: "Contract Loss Accrual",
+        normal_balance: "credit",
+        category: "Who We Owe",
+      },
+    ] as const;
+
+    for (const acct of defaultAccounts) {
+      await sql`
+        INSERT INTO gl_accounts (account_no, description, normal_balance, category_id)
+        SELECT
+          ${acct.account_no},
+          ${acct.description},
+          ${acct.normal_balance},
+          (SELECT id FROM categories WHERE name = ${acct.category} LIMIT 1)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM gl_accounts WHERE account_no = ${acct.account_no}
         )
       `;
     }
