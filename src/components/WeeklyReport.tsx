@@ -209,90 +209,105 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
             <table className="w-full min-w-[640px]">
               <thead>
                 <tr>
-                  <th className="table-th w-24">Account #</th>
-                  <th className="table-th">Description</th>
-                  <th className="table-th text-right w-32">Beg Balance</th>
-                  <th className="table-th text-right w-32">End Balance</th>
-                  {hasPrior && <th className="table-th text-right w-44">Change (WoW)</th>}
+                  <th className="table-th w-24">Acct</th>
+                  <th className="table-th">Desc</th>
+                  {cat.type === "activity" ? (
+                    <>
+                      <th className="table-th text-right w-36">Period Dr</th>
+                      <th className="table-th text-right w-36">Period Cr</th>
+                      <th className="table-th text-right w-36">Net Activity</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="table-th text-right w-32">Beg</th>
+                      <th className="table-th text-right w-32">End</th>
+                      <th className="table-th text-right w-32">Change ($)</th>
+                      <th className="table-th text-right w-28">Change (%)</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {displayAccounts.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={hasPrior ? 5 : 4}
-                      className="px-4 py-6 text-center text-sm text-gray-400 italic"
-                    >
-                      No changes this week.
-                    </td>
-                  </tr>
-                ) : (
-                  displayAccounts.map((acct) => (
-                    <tr key={acct.gl_account_id} className="hover:bg-gray-50">
-                      <td className="table-td font-mono text-xs text-gray-500">
-                        {acct.account_no}
+                {cat.type === "activity" ? (
+                  <>
+                    {cat.accounts.map((acct) => {
+                      const net = acct.period_debit - acct.period_credit;
+                      return (
+                        <tr key={acct.gl_account_id} className="hover:bg-gray-50">
+                          <td className="table-td font-mono text-xs text-gray-500">{acct.account_no}</td>
+                          <td className="table-td text-gray-800">{acct.description}</td>
+                          <td className="table-td text-right tabular-nums text-gray-600">
+                            {acct.period_debit > 0 ? fmtMoney(acct.period_debit) : ""}
+                          </td>
+                          <td className="table-td text-right tabular-nums text-gray-600">
+                            {acct.period_credit > 0 ? fmtMoney(acct.period_credit) : ""}
+                          </td>
+                          <td className="table-td text-right tabular-nums font-medium text-gray-900">
+                            {net !== 0 ? fmtMoney(net) : ""}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-gray-50">
+                      <td colSpan={2} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide border-t border-gray-200">Total</td>
+                      <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200 tabular-nums">
+                        {fmtMoney(cat.accounts.reduce((s, a) => s + a.period_debit, 0))}
                       </td>
-                      <td className="table-td text-gray-800">{acct.description}</td>
-                      <td className="table-td text-right text-gray-600">
-                        {fmtMoney(acct.beg_balance)}
+                      <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200 tabular-nums">
+                        {fmtMoney(cat.accounts.reduce((s, a) => s + a.period_credit, 0))}
                       </td>
-                      <td className="table-td text-right font-medium text-gray-900">
-                        {fmtMoney(acct.end_balance)}
+                      <td className="px-4 py-2.5 text-right text-sm font-bold text-gray-900 border-t border-gray-200 tabular-nums">
+                        {fmtMoney(cat.accounts.reduce((s, a) => s + (a.period_debit - a.period_credit), 0))}
                       </td>
-                      {hasPrior && (
-                        <td className={`table-td text-right font-medium ${changeColor(acct.change)}`}>
-                          {acct.change !== 0 ? (
-                            <>
-                              {fmtMoney(acct.change)}{" "}
-                              <span className="text-xs opacity-70">
-                                ({fmtPct(acct.change_pct)})
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-gray-400">—</span>
-                          )}
-                        </td>
-                      )}
                     </tr>
-                  ))
+                  </>
+                ) : (
+                  <>
+                    {displayAccounts.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-400 italic">
+                          No changes this week.
+                        </td>
+                      </tr>
+                    ) : (
+                      displayAccounts.map((acct) => (
+                        <tr key={acct.gl_account_id} className="hover:bg-gray-50">
+                          <td className="table-td font-mono text-xs text-gray-500">{acct.account_no}</td>
+                          <td className="table-td text-gray-800">{acct.description}</td>
+                          <td className="table-td text-right text-gray-600 tabular-nums">{fmtMoney(acct.beg_balance)}</td>
+                          <td className="table-td text-right font-medium text-gray-900 tabular-nums">{fmtMoney(acct.end_balance)}</td>
+                          <td className={`table-td text-right font-medium tabular-nums ${changeColor(acct.change)}`}>
+                            {acct.change !== 0 ? fmtMoney(acct.change) : <span className="text-gray-400">—</span>}
+                          </td>
+                          <td className={`table-td text-right text-xs tabular-nums ${changeColor(acct.change)}`}>
+                            {acct.change !== 0 ? fmtPct(acct.change_pct) : <span className="text-gray-400">—</span>}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                    <tr className="bg-gray-50">
+                      <td colSpan={2} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide border-t border-gray-200">Total</td>
+                      <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200 tabular-nums">
+                        {fmtMoney(cat.accounts.reduce((s, a) => s + a.beg_balance, 0))}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-sm font-bold text-gray-900 border-t border-gray-200 tabular-nums">
+                        {fmtMoney(cat.current_total)}
+                      </td>
+                      <td className={`px-4 py-2.5 text-right text-sm font-semibold border-t border-gray-200 tabular-nums ${changeColor(cat.change)}`}>
+                        {cat.change !== 0 ? fmtMoney(cat.change) : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className={`px-4 py-2.5 text-right text-xs border-t border-gray-200 tabular-nums ${changeColor(cat.change)}`}>
+                        {cat.change !== 0 ? fmtPct(cat.change_pct) : <span className="text-gray-400">—</span>}
+                      </td>
+                    </tr>
+                  </>
                 )}
-
-                {/* Category total row */}
-                <tr className="bg-gray-50">
-                  <td
-                    colSpan={2}
-                    className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide border-t border-gray-200"
-                  >
-                    Total
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-sm font-semibold text-gray-700 border-t border-gray-200">
-                    {fmtMoney(cat.accounts.reduce((s, a) => s + a.beg_balance, 0))}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-sm font-bold text-gray-900 border-t border-gray-200">
-                    {fmtMoney(cat.current_total)}
-                  </td>
-                  {hasPrior && (
-                    <td
-                      className={`px-4 py-2.5 text-right text-sm font-semibold border-t border-gray-200 ${changeColor(cat.change)}`}
-                    >
-                      {cat.change !== 0 ? (
-                        <>
-                          {fmtMoney(cat.change)}{" "}
-                          <span className="text-xs opacity-70">
-                            ({fmtPct(cat.change_pct)})
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                  )}
-                </tr>
               </tbody>
             </table>
           </div>
 
-          {/* Footer controls: show-all toggle + sort toggle */}
+          {/* Footer controls: show-all toggle + sort toggle (balance only) */}
+          {cat.type !== "activity" && (
           <div className="px-5 py-2 border-t border-gray-100 flex items-center justify-between gap-3 flex-wrap">
             <div>
               {hasChanges && cat.accounts.length > changedAccounts.length && (
@@ -332,8 +347,86 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
               </div>
             )}
           </div>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Section: Category Totals Table ──────────────────────────────────────────
+
+function CategoryTotalsTable({ data }: { data: WeeklyReportData }) {
+  const hasPrior = !!data.prior_week_ending;
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">
+        Category Totals
+      </h2>
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px]">
+            <thead>
+              <tr>
+                <th className="table-th">Category</th>
+                <th className="table-th text-right w-36">End Balance</th>
+                <th className="table-th text-right w-36">Change WoW ($)</th>
+                <th className="table-th text-right w-32">Change WoW (%)</th>
+                <th className="table-th text-right w-36">YTD Avg</th>
+                <th className="table-th text-right w-32">vs YTD Avg (%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.categories.map((cat) => {
+                const vsYtd =
+                  cat.ytd_avg !== 0
+                    ? ((cat.current_total - cat.ytd_avg) / Math.abs(cat.ytd_avg)) * 100
+                    : null;
+                return (
+                  <tr key={cat.name} className="hover:bg-gray-50">
+                    <td className="table-td">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: cat.color }}
+                        />
+                        <span className="font-medium text-gray-800">{cat.name}</span>
+                      </div>
+                    </td>
+                    <td className="table-td text-right font-medium text-gray-900 tabular-nums">
+                      {fmtMoney(cat.current_total)}
+                    </td>
+                    <td className="table-td text-right tabular-nums">
+                      {hasPrior ? (
+                        <span className={cat.change > 0 ? "text-green-600" : cat.change < 0 ? "text-red-600" : "text-gray-400"}>
+                          {fmtMoney(cat.change)}
+                        </span>
+                      ) : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="table-td text-right tabular-nums">
+                      {hasPrior ? (
+                        <span className={`font-medium ${cat.change > 0 ? "text-green-600" : cat.change < 0 ? "text-red-600" : "text-gray-400"}`}>
+                          {fmtPct(cat.change_pct)}
+                        </span>
+                      ) : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="table-td text-right text-gray-600 tabular-nums">
+                      {cat.ytd_avg !== 0 ? fmtMoney(cat.ytd_avg) : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="table-td text-right tabular-nums">
+                      {vsYtd !== null ? (
+                        <span className={`font-medium ${vsYtd > 0 ? "text-green-600" : vsYtd < 0 ? "text-red-600" : "text-gray-400"}`}>
+                          {fmtPct(vsYtd)}
+                        </span>
+                      ) : <span className="text-gray-400">—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
@@ -803,7 +896,10 @@ export default function WeeklyReport({ data }: { data: WeeklyReportData }) {
       {/* Executive Summary */}
       <ExecutiveSummary data={data} />
 
-      {/* Category Movement Tables */}
+      {/* Category Totals */}
+      <CategoryTotalsTable data={data} />
+
+      {/* Per-Category Tables */}
       <div>
         <h2 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">
           Category Movement
@@ -812,12 +908,6 @@ export default function WeeklyReport({ data }: { data: WeeklyReportData }) {
           {data.categories.map((cat) => (
             <CategoryMovementTable key={cat.name} cat={cat} hasPrior={hasPrior} />
           ))}
-          {data.overhead_summary && (
-            <OverheadMovementRow
-              summary={data.overhead_summary}
-              hasPrior={hasPrior}
-            />
-          )}
         </div>
       </div>
 

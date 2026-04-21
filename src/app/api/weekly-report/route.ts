@@ -11,16 +11,20 @@ export interface ReportAccount {
   end_balance: number;
   change: number;
   change_pct: number;
+  period_debit: number;
+  period_credit: number;
 }
 
 export interface ReportCategory {
   name: string;
   color: string;
   sort_order: number;
+  type: "balance" | "activity";
   current_total: number;
   prior_total: number;
   change: number;
   change_pct: number;
+  ytd_avg: number;
   accounts: ReportAccount[];
 }
 
@@ -111,11 +115,14 @@ export async function GET(req: NextRequest) {
         wb.gl_account_id,
         g.account_no,
         g.description,
+        g.is_pl_flow,
         c.name       AS category_name,
         c.color      AS category_color,
         c.sort_order AS category_sort_order,
-        wb.beg_balance::numeric AS beg_balance,
-        wb.end_balance::numeric AS end_balance
+        wb.beg_balance::numeric    AS beg_balance,
+        wb.end_balance::numeric    AS end_balance,
+        wb.period_debit::numeric   AS period_debit,
+        wb.period_credit::numeric  AS period_credit
       FROM weekly_balances wb
       JOIN  gl_accounts g ON g.id = wb.gl_account_id
       LEFT JOIN categories c ON c.id = g.category_id
@@ -163,12 +170,37 @@ export async function GET(req: NextRequest) {
     }
 
     // ── 3. Build category groups ──────────────────────────────────────────────
+    // ── 3a. YTD averages (avg end_balance per category across weeks YTD) ─────
+    const ytdRows = await sql`
+      SELECT
+        c.name          AS category_name,
+        AVG(sub.wk_total)::numeric AS ytd_avg
+      FROM (
+        SELECT
+          g.category_id,
+          wb.week_ending,
+          SUM(wb.end_balance)::numeric AS wk_total
+        FROM weekly_balances wb
+        JOIN gl_accounts g ON g.id = wb.gl_account_id
+        WHERE EXTRACT(YEAR FROM wb.week_ending) = EXTRACT(YEAR FROM ${weekEnding}::date)
+          AND wb.week_ending <= ${weekEnding}::date
+        GROUP BY g.category_id, wb.week_ending
+      ) sub
+      JOIN categories c ON c.id = sub.category_id
+      GROUP BY c.name
+    `;
+    const ytdMap = new Map<string, number>();
+    for (const r of ytdRows) {
+      ytdMap.set(r.category_name as string, n(r.ytd_avg));
+    }
+
     const catMap = new Map<
       string,
       {
         name: string;
         color: string;
         sort_order: number;
+        is_pl_flow: boolean;
         accounts: ReportAccount[];
         prior_total: number;
       }
@@ -178,9 +210,12 @@ export async function GET(req: NextRequest) {
       const catName = (row.category_name as string | null) ?? "Uncategorized";
       const catColor = (row.category_color as string | null) ?? "#6B7280";
       const catSort = row.category_sort_order !== null ? Number(row.category_sort_order) : 999;
+      const isPlFlow = Boolean(row.is_pl_flow);
       const glId = Number(row.gl_account_id);
       const beg = n(row.beg_balance);
       const end = n(row.end_balance);
+      const periodDebit = n(row.period_debit);
+      const periodCredit = n(row.period_credit);
       const change = end - beg;
       const change_pct = beg !== 0 ? (change / Math.abs(beg)) * 100 : 0;
 
@@ -189,6 +224,7 @@ export async function GET(req: NextRequest) {
           name: catName,
           color: catColor,
           sort_order: catSort,
+          is_pl_flow: isPlFlow,
           accounts: [],
           prior_total: 0,
         });
@@ -205,6 +241,8 @@ export async function GET(req: NextRequest) {
         end_balance: end,
         change,
         change_pct,
+        period_debit: periodDebit,
+        period_credit: periodCredit,
       });
     }
 
@@ -216,18 +254,18 @@ export async function GET(req: NextRequest) {
         const change = current_total - prior_total;
         const change_pct =
           prior_total !== 0 ? (change / Math.abs(prior_total)) * 100 : 0;
-        // Accounts stay in account_no ASC order from the SQL ORDER BY — the
-        // client may opt into a different sort via a UI toggle.
         return {
           name: cat.name,
           color: cat.color,
           sort_order: cat.sort_order,
+          type: cat.is_pl_flow ? "activity" : "balance",
           current_total,
           prior_total,
           change,
           change_pct,
+          ytd_avg: ytdMap.get(cat.name) ?? 0,
           accounts: cat.accounts,
-        };
+        } as ReportCategory;
       });
 
     // ── 4. Build ratios ───────────────────────────────────────────────────────
