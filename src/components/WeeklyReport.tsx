@@ -146,7 +146,7 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
   const [showAll, setShowAll] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("account");
 
-  // Determine which accounts changed
+  // Balance: accounts with end-balance change
   const changedAccounts = cat.accounts.filter((a) => a.change !== 0);
   const baseAccounts = showAll ? cat.accounts : changedAccounts;
   const displayAccounts =
@@ -154,6 +154,12 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
       ? [...baseAccounts].sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
       : baseAccounts; // already account_no ASC from the API
   const hasChanges = changedAccounts.length > 0;
+
+  // Activity: accounts with non-zero period Dr or Cr activity
+  const activityAccounts = cat.accounts.filter(
+    (a) => (a.period_debit ?? 0) !== 0 || (a.period_credit ?? 0) !== 0,
+  );
+  const displayActivityAccounts = showAll ? cat.accounts : activityAccounts;
 
   // For "favorable" coloring: cash up = good; AR up = good; AP up = bad; payroll up = bad
   const isCostCategory =
@@ -241,7 +247,14 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
               <tbody>
                 {cat.type === "activity" ? (
                   <>
-                    {cat.accounts.map((acct) => {
+                    {displayActivityAccounts.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-sm text-gray-400 italic">
+                          No activity this week.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {displayActivityAccounts.map((acct) => {
                       const net = acct.period_debit - acct.period_credit;
                       return (
                         <tr key={acct.gl_account_id} className="hover:bg-gray-50">
@@ -319,45 +332,57 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
 
           {/* Footer controls: show-all toggle + sort toggle (balance only) */}
           {cat.type !== "activity" && (
-          <div className="px-5 py-2 border-t border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              {hasChanges && cat.accounts.length > changedAccounts.length && (
-                <button
-                  onClick={() => setShowAll((s) => !s)}
-                  className="text-xs text-[#1B2A4A] hover:underline font-medium"
-                >
-                  {showAll
-                    ? "Show changes only"
-                    : `Show all ${cat.accounts.length} accounts`}
-                </button>
+            <div className="px-5 py-2 border-t border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                {hasChanges && cat.accounts.length > changedAccounts.length && (
+                  <button
+                    onClick={() => setShowAll((s) => !s)}
+                    className="text-xs text-[#1B2A4A] hover:underline font-medium"
+                  >
+                    {showAll
+                      ? "Show changes only"
+                      : `Show all ${cat.accounts.length} accounts`}
+                  </button>
+                )}
+              </div>
+              {hasPrior && displayAccounts.length > 1 && (
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <span>Sort:</span>
+                  <button
+                    onClick={() => setSortMode("account")}
+                    className={`px-2 py-0.5 rounded ${
+                      sortMode === "account"
+                        ? "bg-[#1B2A4A] text-white font-medium"
+                        : "text-[#1B2A4A] hover:bg-gray-100"
+                    }`}
+                  >
+                    Account #
+                  </button>
+                  <button
+                    onClick={() => setSortMode("change")}
+                    className={`px-2 py-0.5 rounded ${
+                      sortMode === "change"
+                        ? "bg-[#1B2A4A] text-white font-medium"
+                        : "text-[#1B2A4A] hover:bg-gray-100"
+                    }`}
+                  >
+                    Change ($)
+                  </button>
+                </div>
               )}
             </div>
-            {hasPrior && displayAccounts.length > 1 && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <span>Sort:</span>
-                <button
-                  onClick={() => setSortMode("account")}
-                  className={`px-2 py-0.5 rounded ${
-                    sortMode === "account"
-                      ? "bg-[#1B2A4A] text-white font-medium"
-                      : "text-[#1B2A4A] hover:bg-gray-100"
-                  }`}
-                >
-                  Account #
-                </button>
-                <button
-                  onClick={() => setSortMode("change")}
-                  className={`px-2 py-0.5 rounded ${
-                    sortMode === "change"
-                      ? "bg-[#1B2A4A] text-white font-medium"
-                      : "text-[#1B2A4A] hover:bg-gray-100"
-                  }`}
-                >
-                  Change ($)
-                </button>
-              </div>
-            )}
-          </div>
+          )}
+          {cat.type === "activity" && activityAccounts.length > 0 && activityAccounts.length < cat.accounts.length && (
+            <div className="px-5 py-2 border-t border-gray-100 flex items-center gap-3 flex-wrap">
+              <button
+                onClick={() => setShowAll((s) => !s)}
+                className="text-xs text-[#1B2A4A] hover:underline font-medium"
+              >
+                {showAll
+                  ? `Show ${activityAccounts.length} active accounts only`
+                  : `Show all ${activityAccounts.length} accounts`}
+              </button>
+            </div>
           )}
         </>
       )}

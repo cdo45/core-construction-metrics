@@ -102,7 +102,12 @@ function PrintCategoryTable({ cat, hasPrior }: { cat: ReportCategory; hasPrior: 
           </tr>
         </thead>
         <tbody>
-          {cat.accounts.map((acct) => (
+          {(isActivity
+            ? cat.accounts.filter(
+                (a) => (a.period_debit ?? 0) !== 0 || (a.period_credit ?? 0) !== 0,
+              )
+            : cat.accounts
+          ).map((acct) => (
             <tr key={acct.gl_account_id}>
               <td style={{ fontFamily: "monospace", fontSize: "8pt", color: "#6b7280" }}>{acct.account_no}</td>
               <td>{acct.description}</td>
