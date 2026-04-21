@@ -25,6 +25,12 @@ export interface ReportCategory {
   change: number;
   change_pct: number;
   ytd_avg: number;
+  /** For activity categories: sum of period_debit − period_credit this week */
+  current_net_activity: number;
+  /** For activity categories: net activity from prior week (0 if none) */
+  prior_net_activity: number;
+  /** For activity categories: YTD avg of weekly net activity */
+  ytd_avg_activity: number;
   accounts: ReportAccount[];
 }
 
@@ -153,33 +159,42 @@ export async function GET(req: NextRequest) {
       priorRows = await sql`
         SELECT
           wb.gl_account_id,
-          wb.beg_balance::numeric AS beg_balance,
-          wb.end_balance::numeric AS end_balance
+          wb.beg_balance::numeric    AS beg_balance,
+          wb.end_balance::numeric    AS end_balance,
+          wb.period_debit::numeric   AS period_debit,
+          wb.period_credit::numeric  AS period_credit
         FROM weekly_balances wb
         WHERE wb.week_ending = ${priorWeekEnding}
       `;
     }
 
     // Index prior rows by gl_account_id for quick lookup
-    const priorMap = new Map<number, { beg: number; end: number }>();
+    const priorMap = new Map<
+      number,
+      { beg: number; end: number; period_debit: number; period_credit: number }
+    >();
     for (const r of priorRows) {
       priorMap.set(Number(r.gl_account_id), {
         beg: n(r.beg_balance),
         end: n(r.end_balance),
+        period_debit: n(r.period_debit),
+        period_credit: n(r.period_credit),
       });
     }
 
     // ── 3. Build category groups ──────────────────────────────────────────────
-    // ── 3a. YTD averages (avg end_balance per category across weeks YTD) ─────
+    // ── 3a. YTD averages (avg end_balance AND avg net activity per category) ──
     const ytdRows = await sql`
       SELECT
         c.name          AS category_name,
-        AVG(sub.wk_total)::numeric AS ytd_avg
+        AVG(sub.wk_end_total)::numeric     AS ytd_avg,
+        AVG(sub.wk_net_activity)::numeric  AS ytd_avg_activity
       FROM (
         SELECT
           g.category_id,
           wb.week_ending,
-          SUM(wb.end_balance)::numeric AS wk_total
+          SUM(wb.end_balance)::numeric                        AS wk_end_total,
+          SUM(wb.period_debit - wb.period_credit)::numeric    AS wk_net_activity
         FROM weekly_balances wb
         JOIN gl_accounts g ON g.id = wb.gl_account_id
         WHERE EXTRACT(YEAR FROM wb.week_ending) = EXTRACT(YEAR FROM ${weekEnding}::date)
@@ -190,8 +205,10 @@ export async function GET(req: NextRequest) {
       GROUP BY c.name
     `;
     const ytdMap = new Map<string, number>();
+    const ytdActivityMap = new Map<string, number>();
     for (const r of ytdRows) {
       ytdMap.set(r.category_name as string, n(r.ytd_avg));
+      ytdActivityMap.set(r.category_name as string, n(r.ytd_avg_activity));
     }
 
     const catMap = new Map<
@@ -203,6 +220,7 @@ export async function GET(req: NextRequest) {
         is_pl_flow: boolean;
         accounts: ReportAccount[];
         prior_total: number;
+        prior_net_activity: number;
       }
     >();
 
@@ -227,12 +245,15 @@ export async function GET(req: NextRequest) {
           is_pl_flow: isPlFlow,
           accounts: [],
           prior_total: 0,
+          prior_net_activity: 0,
         });
       }
 
       const prior = priorMap.get(glId);
       const priorEnd = prior ? prior.end : 0;
+      const priorNet = prior ? prior.period_debit - prior.period_credit : 0;
       catMap.get(catName)!.prior_total += priorEnd;
+      catMap.get(catName)!.prior_net_activity += priorNet;
       catMap.get(catName)!.accounts.push({
         gl_account_id: glId,
         account_no: Number(row.account_no),
@@ -250,6 +271,10 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((cat) => {
         const current_total = cat.accounts.reduce((s, a) => s + a.end_balance, 0);
+        const current_net_activity = cat.accounts.reduce(
+          (s, a) => s + (a.period_debit - a.period_credit),
+          0,
+        );
         const prior_total = cat.prior_total;
         const change = current_total - prior_total;
         const change_pct =
@@ -264,6 +289,9 @@ export async function GET(req: NextRequest) {
           change,
           change_pct,
           ytd_avg: ytdMap.get(cat.name) ?? 0,
+          current_net_activity,
+          prior_net_activity: cat.prior_net_activity,
+          ytd_avg_activity: ytdActivityMap.get(cat.name) ?? 0,
           accounts: cat.accounts,
         } as ReportCategory;
       });

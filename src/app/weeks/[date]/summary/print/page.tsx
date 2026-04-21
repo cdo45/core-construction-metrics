@@ -60,16 +60,25 @@ const printStyles = `
 
 function PrintCategoryTable({ cat, hasPrior }: { cat: ReportCategory; hasPrior: boolean }) {
   const isActivity = cat.type === "activity";
+  const headerValue = isActivity ? cat.current_net_activity : cat.current_total;
+  const headerDelta = isActivity
+    ? cat.current_net_activity - cat.prior_net_activity
+    : cat.change;
+  const headerDeltaPct = isActivity
+    ? (cat.prior_net_activity !== 0
+        ? (headerDelta / Math.abs(cat.prior_net_activity)) * 100
+        : 0)
+    : cat.change_pct;
   return (
     <div className="page-break" style={{ marginTop: "16px" }}>
       <div className="cat-header" style={{ backgroundColor: cat.color }}>
         {cat.name}
-        {hasPrior && cat.change !== 0 && (
+        {hasPrior && headerDelta !== 0 && (
           <span style={{ marginLeft: "12px", fontSize: "8pt", opacity: 0.9 }}>
-            WoW: {fmtMoney(cat.change)} ({fmtPct(cat.change_pct)})
+            WoW: {fmtMoney(headerDelta)} ({fmtPct(headerDeltaPct)})
           </span>
         )}
-        <span style={{ float: "right" }}>Total: {fmtMoney(cat.current_total)}</span>
+        <span style={{ float: "right" }}>Total: {fmtMoney(headerValue)}</span>
       </div>
       <table className="print-table">
         <thead>
@@ -246,19 +255,23 @@ export default function PrintPage({ params }: { params: Promise<{ date: string }
               <tbody>
                 {data.categories.map((cat) => {
                   const hasPrior = !!data.prior_week_ending;
-                  const vsYtd = cat.ytd_avg !== 0
-                    ? ((cat.current_total - cat.ytd_avg) / Math.abs(cat.ytd_avg)) * 100
-                    : null;
+                  const isActivity = cat.type === "activity";
+                  const endValue = isActivity ? cat.current_net_activity : cat.current_total;
+                  const priorValue = isActivity ? cat.prior_net_activity : cat.prior_total;
+                  const wowDelta = endValue - priorValue;
+                  const wowPct = priorValue !== 0 ? (wowDelta / Math.abs(priorValue)) * 100 : 0;
+                  const ytdAvg = isActivity ? cat.ytd_avg_activity : cat.ytd_avg;
+                  const vsYtd = ytdAvg !== 0 ? ((endValue - ytdAvg) / Math.abs(ytdAvg)) * 100 : null;
                   return (
                     <tr key={cat.name}>
                       <td style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", backgroundColor: cat.color, flexShrink: 0 }} />
                         {cat.name}
                       </td>
-                      <td style={{ textAlign: "right" }}>{fmtMoney(cat.current_total)}</td>
-                      <td style={{ textAlign: "right" }}>{hasPrior ? fmtMoney(cat.change) : "—"}</td>
-                      <td style={{ textAlign: "right" }}>{hasPrior ? fmtPct(cat.change_pct) : "—"}</td>
-                      <td style={{ textAlign: "right" }}>{cat.ytd_avg !== 0 ? fmtMoney(cat.ytd_avg) : "—"}</td>
+                      <td style={{ textAlign: "right" }}>{fmtMoney(endValue)}</td>
+                      <td style={{ textAlign: "right" }}>{hasPrior ? fmtMoney(wowDelta) : "—"}</td>
+                      <td style={{ textAlign: "right" }}>{hasPrior ? fmtPct(wowPct) : "—"}</td>
+                      <td style={{ textAlign: "right" }}>{ytdAvg !== 0 ? fmtMoney(ytdAvg) : "—"}</td>
                       <td style={{ textAlign: "right" }}>{vsYtd !== null ? fmtPct(vsYtd) : "—"}</td>
                     </tr>
                   );

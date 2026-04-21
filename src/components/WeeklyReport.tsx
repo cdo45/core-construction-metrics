@@ -168,6 +168,17 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
     return isFavorable ? "text-green-600" : "text-red-600";
   }
 
+  const isActivity = cat.type === "activity";
+  const headerValue = isActivity ? cat.current_net_activity : cat.current_total;
+  const headerDelta = isActivity
+    ? cat.current_net_activity - cat.prior_net_activity
+    : cat.change;
+  const headerDeltaPct = isActivity
+    ? (cat.prior_net_activity !== 0
+        ? (headerDelta / Math.abs(cat.prior_net_activity)) * 100
+        : 0)
+    : cat.change_pct;
+
   return (
     <div className="card overflow-hidden">
       <button
@@ -177,19 +188,19 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
       >
         <div className="flex items-center gap-3">
           <span className="font-semibold text-sm text-white">{cat.name}</span>
-          {hasPrior && cat.change !== 0 && (
+          {hasPrior && headerDelta !== 0 && (
             <span
               className={`text-xs font-bold px-2 py-0.5 rounded-full bg-white bg-opacity-20 ${
-                changeColor(cat.change)
+                changeColor(headerDelta)
               } !text-white`}
             >
-              {fmtPct(cat.change_pct)}
+              {fmtPct(headerDeltaPct)}
             </span>
           )}
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm font-bold text-white">
-            {fmtMoneyShort(cat.current_total)}
+            {fmtMoneyShort(headerValue)}
           </span>
           <svg
             className={`w-4 h-4 text-white transition-transform ${open ? "rotate-180" : ""}`}
@@ -378,10 +389,14 @@ function CategoryTotalsTable({ data }: { data: WeeklyReportData }) {
             </thead>
             <tbody>
               {data.categories.map((cat) => {
+                const isActivity = cat.type === "activity";
+                const endValue = isActivity ? cat.current_net_activity : cat.current_total;
+                const priorValue = isActivity ? cat.prior_net_activity : cat.prior_total;
+                const wowDelta = endValue - priorValue;
+                const wowPct = priorValue !== 0 ? (wowDelta / Math.abs(priorValue)) * 100 : 0;
+                const ytdAvg = isActivity ? cat.ytd_avg_activity : cat.ytd_avg;
                 const vsYtd =
-                  cat.ytd_avg !== 0
-                    ? ((cat.current_total - cat.ytd_avg) / Math.abs(cat.ytd_avg)) * 100
-                    : null;
+                  ytdAvg !== 0 ? ((endValue - ytdAvg) / Math.abs(ytdAvg)) * 100 : null;
                 return (
                   <tr key={cat.name} className="hover:bg-gray-50">
                     <td className="table-td">
@@ -394,24 +409,24 @@ function CategoryTotalsTable({ data }: { data: WeeklyReportData }) {
                       </div>
                     </td>
                     <td className="table-td text-right font-medium text-gray-900 tabular-nums">
-                      {fmtMoney(cat.current_total)}
+                      {fmtMoney(endValue)}
                     </td>
                     <td className="table-td text-right tabular-nums">
                       {hasPrior ? (
-                        <span className={cat.change > 0 ? "text-green-600" : cat.change < 0 ? "text-red-600" : "text-gray-400"}>
-                          {fmtMoney(cat.change)}
+                        <span className={wowDelta > 0 ? "text-green-600" : wowDelta < 0 ? "text-red-600" : "text-gray-400"}>
+                          {fmtMoney(wowDelta)}
                         </span>
                       ) : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="table-td text-right tabular-nums">
                       {hasPrior ? (
-                        <span className={`font-medium ${cat.change > 0 ? "text-green-600" : cat.change < 0 ? "text-red-600" : "text-gray-400"}`}>
-                          {fmtPct(cat.change_pct)}
+                        <span className={`font-medium ${wowDelta > 0 ? "text-green-600" : wowDelta < 0 ? "text-red-600" : "text-gray-400"}`}>
+                          {fmtPct(wowPct)}
                         </span>
                       ) : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="table-td text-right text-gray-600 tabular-nums">
-                      {cat.ytd_avg !== 0 ? fmtMoney(cat.ytd_avg) : <span className="text-gray-400">—</span>}
+                      {ytdAvg !== 0 ? fmtMoney(ytdAvg) : <span className="text-gray-400">—</span>}
                     </td>
                     <td className="table-td text-right tabular-nums">
                       {vsYtd !== null ? (
