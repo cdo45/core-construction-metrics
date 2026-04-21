@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
-// GET /api/gl-accounts — list all GL accounts with category name joined
+// GET /api/gl-accounts — list all GL accounts with category name and balance_count joined
 export async function GET() {
   try {
     const sql = getDb();
@@ -15,9 +15,12 @@ export async function GET() {
         c.name  AS category_name,
         c.color AS category_color,
         g.is_active,
-        g.created_at
+        g.created_at,
+        COUNT(wb.id)::int AS balance_count
       FROM gl_accounts g
       LEFT JOIN categories c ON c.id = g.category_id
+      LEFT JOIN weekly_balances wb ON wb.gl_account_id = g.id
+      GROUP BY g.id, c.name, c.color
       ORDER BY g.account_no ASC
     `;
     return NextResponse.json(accounts);
