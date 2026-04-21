@@ -7,6 +7,7 @@ const navLinks = [
   { href: "/setup",     label: "Setup" },
   { href: "/weeks",     label: "Weeks" },
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/import",    label: "Import" },
 ];
 
 export default function NavBar() {
