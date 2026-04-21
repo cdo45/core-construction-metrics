@@ -485,15 +485,23 @@ export default function WeekDetailPage({
       ) : (
         <div className="flex flex-col gap-5">
           {/* Category sections */}
-          {categoryGroups.map((g) => (
-            <CategorySection
-              key={g.name}
-              group={g}
-              onAccountClick={(accountNo, color) =>
-                setModalAccount({ accountNo, color })
-              }
-            />
-          ))}
+          {categoryGroups.length === 0 ? (
+            <div className="card px-6 py-12 text-center">
+              <p className="text-sm text-gray-400 italic">
+                No data for this week yet — import CSV or enter manually.
+              </p>
+            </div>
+          ) : (
+            categoryGroups.map((g) => (
+              <CategorySection
+                key={g.name}
+                group={g}
+                onAccountClick={(accountNo, color) =>
+                  setModalAccount({ accountNo, color })
+                }
+              />
+            ))
+          )}
 
           {/* Bid Activity card */}
           <div className="card">
