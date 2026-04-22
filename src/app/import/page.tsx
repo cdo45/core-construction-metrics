@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
+import QuickAddModal from "@/components/import/QuickAddModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,18 +98,28 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
 
 // ─── Preview display ──────────────────────────────────────────────────────────
 
+interface QuickAddTarget {
+  accountNo: number;
+  division: string;
+  description: string;
+}
+
 function PreviewView({
   preview,
   onCancel,
   onConfirm,
+  onReprocess,
   confirming,
 }: {
   preview: ImportPreview;
   onCancel: () => void;
   onConfirm: () => void;
+  onReprocess: () => Promise<void>;
   confirming: boolean;
 }) {
   const [oosOpen, setOosOpen] = useState(false);
+  const [quickAdd, setQuickAdd] = useState<QuickAddTarget | null>(null);
+  const [reprocessing, setReprocessing] = useState(false);
 
   const totalNew = preview.weeksAffected.reduce((s, w) => s + w.rowsNew, 0);
   const totalDup = preview.weeksAffected.reduce((s, w) => s + w.rowsDuplicate, 0);
@@ -203,6 +214,7 @@ function PreviewView({
                   <th className="table-th">Division</th>
                   <th className="table-th">Description</th>
                   <th className="table-th text-right">Rows</th>
+                  <th className="table-th w-36" />
                 </tr>
               </thead>
               <tbody>
@@ -212,6 +224,14 @@ function PreviewView({
                     <td className="table-td text-gray-500">{a.division || "—"}</td>
                     <td className="table-td text-gray-700">{a.description}</td>
                     <td className="table-td text-right text-gray-500">{a.rowCount}</td>
+                    <td className="table-td text-right">
+                      <button
+                        onClick={() => setQuickAdd({ accountNo: a.accountNo, division: a.division, description: a.description })}
+                        className="text-xs text-[#1B2A4A] hover:underline font-medium whitespace-nowrap"
+                      >
+                        + Add to category
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -243,6 +263,41 @@ function PreviewView({
           {confirming ? "Saving…" : `Confirm & save ${totalNew.toLocaleString()} rows`}
         </button>
       </div>
+
+      {/* Quick-add modal */}
+      {quickAdd && (
+        <QuickAddModal
+          isOpen={true}
+          accountNo={quickAdd.accountNo}
+          division={quickAdd.division}
+          description={quickAdd.description}
+          onClose={() => setQuickAdd(null)}
+          onAdded={async (categoryName) => {
+            setQuickAdd(null);
+            setReprocessing(true);
+            try {
+              await onReprocess();
+            } finally {
+              setReprocessing(false);
+            }
+            // Show brief toast via window title trick — parent handles toast
+            void categoryName;
+          }}
+        />
+      )}
+
+      {/* Reprocessing overlay */}
+      {reprocessing && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20">
+          <div className="bg-white rounded-xl shadow-lg px-8 py-5 flex items-center gap-3">
+            <svg className="animate-spin w-5 h-5 text-[#1B2A4A]" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <span className="text-sm font-medium text-gray-700">Refreshing preview…</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -279,6 +334,7 @@ export default function ImportPage() {
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ConfirmResult | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const [toast, setToast] = useState("");
 
   async function handleFile(file: File) {
     setState("uploading");
@@ -294,6 +350,21 @@ export default function ImportPage() {
     } catch (e) {
       setUploadError(String(e));
       setState("idle");
+    }
+  }
+
+  async function handleReprocess() {
+    if (!preview) return;
+    const res = await fetch("/api/import/reprocess", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: preview.sessionId }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      setPreview(data);
+      setToast("Preview refreshed.");
+      setTimeout(() => setToast(""), 3000);
     }
   }
 
@@ -349,8 +420,16 @@ export default function ImportPage() {
           preview={preview}
           onCancel={() => { setState("idle"); setPreview(null); }}
           onConfirm={handleConfirm}
+          onReprocess={handleReprocess}
           confirming={state === "confirming"}
         />
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg">
+          {toast}
+        </div>
       )}
 
       {state === "done" && result && <SuccessView result={result} />}
