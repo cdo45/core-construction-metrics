@@ -144,33 +144,6 @@ export async function POST(req: NextRequest) {
 
     console.log('[confirm] processing', rowsImported, 'rows across', affectedWeeks.size, 'weeks');
 
-    // ── Find prior week end_balances for beg_balance chaining ────────────────
-    // For each affected week, find the prior week_ending from the weeks table
-    const priorEndMap = new Map<string, Map<number, number>>(); // weekISO → Map<glId, endBal>
-    console.log('[confirm] step 4 START: priorEndMap build over', affectedWeeks.size, 'weeks');
-    for (const weekISO of affectedWeeks) {
-      console.log('[confirm] step 4a START: priorWeek lookup for', weekISO);
-      const priorRows = await sql`
-        SELECT week_ending::text FROM weeks
-        WHERE week_ending < ${weekISO}::date
-        ORDER BY week_ending DESC LIMIT 1
-      `;
-      console.log('[confirm] step 4a DONE:', priorRows.length, 'prior week rows');
-      if (priorRows.length === 0) continue;
-      const priorWeek = String(priorRows[0].week_ending);
-
-      console.log('[confirm] step 4b START: balRows for priorWeek', priorWeek);
-      const balRows = await sql`
-        SELECT gl_account_id, end_balance FROM weekly_balances
-        WHERE week_ending = ${priorWeek}::date
-      `;
-      console.log('[confirm] step 4b DONE:', balRows.length, 'balance rows');
-      const glMap = new Map<number, number>();
-      for (const r of balRows) glMap.set(Number(r.gl_account_id), parseFloat(String(r.end_balance)));
-      priorEndMap.set(weekISO, glMap);
-    }
-    console.log('[confirm] step 4 DONE');
-
     // ── Persist: bulk-insert all transactions in one statement ───────────────
     const txWeekEndings: string[] = [];
     const txGlIds: number[] = [];
@@ -255,58 +228,87 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Bulk upsert all weekly_balances rows in one statement ────────────────
-    const balWeekArr: string[] = [];
-    const balGlIdArr: number[] = [];
-    const balBegArr: number[] = [];
-    const balEndArr: number[] = [];
-    const balDrArr: number[] = [];
-    const balCrArr: number[] = [];
-
-    for (const bucket of buckets.values()) {
-      const priorMap = priorEndMap.get(bucket.weekEnding);
-      const priorEnd = priorMap?.get(bucket.glId) ?? 0;
-      const existingKey = `${bucket.weekEnding}|${bucket.glId}`;
-      const begBalance = existingBalMap.has(existingKey)
-        ? existingBalMap.get(existingKey)!
-        : priorEnd;
-      const endBalance = bucket.normalBalance === "debit"
-        ? begBalance + bucket.debits - bucket.credits
-        : begBalance - bucket.debits + bucket.credits;
-
-      balWeekArr.push(bucket.weekEnding);
-      balGlIdArr.push(bucket.glId);
-      balBegArr.push(begBalance);
-      balEndArr.push(endBalance);
-      balDrArr.push(bucket.debits);
-      balCrArr.push(bucket.credits);
-    }
-
-    if (balWeekArr.length > 0) {
-      console.log('[confirm] step 7 START: bulk upsert weekly_balances, count=', balWeekArr.length);
-      await sql`
-        INSERT INTO weekly_balances
-          (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
-        SELECT * FROM UNNEST(
-          ${balWeekArr}::date[],
-          ${balGlIdArr}::int[],
-          ${balBegArr}::numeric[],
-          ${balEndArr}::numeric[],
-          ${balDrArr}::numeric[],
-          ${balCrArr}::numeric[]
-        )
-        ON CONFLICT (week_ending, gl_account_id) DO UPDATE SET
-          beg_balance   = EXCLUDED.beg_balance,
-          period_debit  = EXCLUDED.period_debit,
-          period_credit = EXCLUDED.period_credit
+    // ── Per-week chain: for each affected week in ascending date order, ─────
+    //    (a) look up prior week's end_balance JIT from the DB (includes any
+    //        weeks we just swept earlier in this loop), (b) upsert this
+    //        week's balances, (c) run the sweep for this week alone so the
+    //        next iteration can read a correct end_balance.
+    const weeksArr = Array.from(affectedWeeks).sort();
+    for (const weekISO of weeksArr) {
+      // (a) JIT prior-week lookup
+      const priorEndMap = new Map<number, number>();
+      console.log('[confirm] week', weekISO, 'step a START: prior week lookup');
+      const priorRows = await sql`
+        SELECT week_ending::text FROM weeks
+        WHERE week_ending < ${weekISO}::date
+        ORDER BY week_ending DESC LIMIT 1
       `;
-      console.log('[confirm] step 7 DONE');
-    }
+      if (priorRows.length > 0) {
+        const priorWeek = String(priorRows[0].week_ending);
+        const balRows = await sql`
+          SELECT gl_account_id, end_balance FROM weekly_balances
+          WHERE week_ending = ${priorWeek}::date
+        `;
+        for (const r of balRows) {
+          priorEndMap.set(Number(r.gl_account_id), parseFloat(String(r.end_balance)));
+        }
+        console.log('[confirm] week', weekISO, 'step a DONE: prior week =', priorWeek, ', balRows =', balRows.length);
+      } else {
+        console.log('[confirm] week', weekISO, 'step a DONE: no prior week');
+      }
 
-    // ── End-balance sweep: single UPDATE covering every affected week ────────
-    const weeksArr = Array.from(affectedWeeks);
-    if (weeksArr.length > 0) {
-      console.log('[confirm] step 8 START: end_balance sweep for', weeksArr.length, 'weeks');
+      // (b) filter buckets for this week, compute beg/end per bucket
+      const weekBuckets = [...buckets.values()].filter(b => b.weekEnding === weekISO);
+      const balWeekArr: string[] = [];
+      const balGlIdArr: number[] = [];
+      const balBegArr: number[] = [];
+      const balEndArr: number[] = [];
+      const balDrArr: number[] = [];
+      const balCrArr: number[] = [];
+
+      for (const bucket of weekBuckets) {
+        const priorEnd = priorEndMap.get(bucket.glId) ?? 0;
+        const existingKey = `${bucket.weekEnding}|${bucket.glId}`;
+        const begBalance = existingBalMap.has(existingKey)
+          ? existingBalMap.get(existingKey)!
+          : priorEnd;
+        const endBalance = bucket.normalBalance === "debit"
+          ? begBalance + bucket.debits - bucket.credits
+          : begBalance - bucket.debits + bucket.credits;
+
+        balWeekArr.push(bucket.weekEnding);
+        balGlIdArr.push(bucket.glId);
+        balBegArr.push(begBalance);
+        balEndArr.push(endBalance);
+        balDrArr.push(bucket.debits);
+        balCrArr.push(bucket.credits);
+      }
+
+      // (c) upsert this week's weekly_balances rows
+      if (balWeekArr.length > 0) {
+        console.log('[confirm] week', weekISO, 'step b START: upsert weekly_balances, count=', balWeekArr.length);
+        await sql`
+          INSERT INTO weekly_balances
+            (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
+          SELECT * FROM UNNEST(
+            ${balWeekArr}::date[],
+            ${balGlIdArr}::int[],
+            ${balBegArr}::numeric[],
+            ${balEndArr}::numeric[],
+            ${balDrArr}::numeric[],
+            ${balCrArr}::numeric[]
+          )
+          ON CONFLICT (week_ending, gl_account_id) DO UPDATE SET
+            beg_balance   = EXCLUDED.beg_balance,
+            period_debit  = EXCLUDED.period_debit,
+            period_credit = EXCLUDED.period_credit
+        `;
+        console.log('[confirm] week', weekISO, 'step b DONE');
+      }
+
+      // (d) sweep end_balance for THIS week so the next iteration sees
+      //     a correct value when it reads this row as its "prior week".
+      console.log('[confirm] week', weekISO, 'step c START: end_balance sweep (this week)');
       await sql`
         UPDATE weekly_balances b
         SET end_balance = b.beg_balance +
@@ -316,9 +318,9 @@ export async function POST(req: NextRequest) {
           END
         FROM gl_accounts a
         WHERE b.gl_account_id = a.id
-          AND b.week_ending = ANY(${weeksArr}::date[])
+          AND b.week_ending = ${weekISO}::date
       `;
-      console.log('[confirm] step 8 DONE');
+      console.log('[confirm] week', weekISO, 'step c DONE');
     }
 
     // ── Mark affected weeks as confirmed ─────────────────────────────────────
