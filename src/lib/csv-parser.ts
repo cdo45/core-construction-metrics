@@ -154,7 +154,8 @@ export async function buildImportPreview(
       row.basicAccountNo,
       row.division,
       row.auditNumber,
-      row.transactionNo
+      row.debit,
+      row.credit
     );
     const isDuplicate = existingHashes.has(hash);
 

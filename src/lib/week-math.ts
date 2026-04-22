@@ -50,9 +50,10 @@ export function buildDedupeHash(
   basicAccountNo: number,
   division: string,
   auditNumber: string,
-  transactionNo: string
+  debit: number,
+  credit: number
 ): string {
-  return `${weekEnding}|${basicAccountNo}|${division}|${auditNumber}|${transactionNo}`;
+  return `${weekEnding}|${basicAccountNo}|${division}|${auditNumber}|${debit}|${credit}`;
 }
 
 // ─── Inline verification (runs in dev / test environments) ───────────────────

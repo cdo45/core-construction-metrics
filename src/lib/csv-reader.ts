@@ -6,9 +6,6 @@ export interface NormalizedRow {
   basicAccountNo: number;
   jobNo: string;
   dateBooked: Date;
-  journalNo: string;
-  transactionNo: string;
-  lineNo: number;
   fullAccountNo: string;
   debit: number;
   credit: number;
@@ -26,9 +23,6 @@ const COL = {
   basicAccountNo:       3,
   jobNo:                4,
   dateBooked:           5,
-  journalNo:            6,
-  transactionNo:        7,
-  lineNo:               8,
   fullAccountNo:        9,
   debit:               10,
   credit:              11,
@@ -102,9 +96,6 @@ export function parseFoundationCsv(fileBuffer: Buffer): NormalizedRow[] {
       basicAccountNo,
       jobNo:               col(row, COL.jobNo),
       dateBooked,
-      journalNo:           col(row, COL.journalNo),
-      transactionNo:       col(row, COL.transactionNo),
-      lineNo:              parseInt(col(row, COL.lineNo), 10) || 0,
       fullAccountNo:       col(row, COL.fullAccountNo),
       debit:               parseMoney(col(row, COL.debit)),
       credit:              parseMoney(col(row, COL.credit)),
