@@ -45,24 +45,37 @@ export async function POST(req: NextRequest) {
     }));
 
     // ── GL account lookup: (account_no, division) → { id, normalBalance, categoryId } ─
-    const uniqueKeys = new Set(rows.map((r) => `${r.basicAccountNo}|${r.division}`));
+    // Single UNNEST query to batch all lookups instead of one SELECT per unique key
     const glLookup = new Map<
       string,
       { id: number; normalBalance: string; categoryId: number | null }
     >();
-    for (const key of uniqueKeys) {
-      const [acctStr, div] = key.split("|");
-      const dbRows = await sql`
-        SELECT id, normal_balance, category_id
+
+    const lookupAcctNos: number[] = [];
+    const lookupDivisions: string[] = [];
+    const seenKeys = new Set<string>();
+    for (const r of rows) {
+      const key = `${r.basicAccountNo}|${r.division ?? ''}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      lookupAcctNos.push(r.basicAccountNo);
+      lookupDivisions.push(r.division ?? '');
+    }
+
+    if (lookupAcctNos.length > 0) {
+      const glRows = await sql`
+        SELECT id, account_no, division, normal_balance, category_id
         FROM gl_accounts
-        WHERE account_no = ${parseInt(acctStr, 10)} AND division = ${div}
-        LIMIT 1
+        WHERE (account_no, division) IN (
+          SELECT * FROM UNNEST(${lookupAcctNos}::int[], ${lookupDivisions}::text[])
+        )
       `;
-      if (dbRows.length > 0) {
+      for (const r of glRows) {
+        const key = `${Number(r.account_no)}|${String(r.division ?? '')}`;
         glLookup.set(key, {
-          id: Number(dbRows[0].id),
-          normalBalance: String(dbRows[0].normal_balance),
-          categoryId: dbRows[0].category_id != null ? Number(dbRows[0].category_id) : null,
+          id: Number(r.id),
+          normalBalance: String(r.normal_balance),
+          categoryId: r.category_id != null ? Number(r.category_id) : null,
         });
       }
     }
@@ -95,7 +108,7 @@ export async function POST(req: NextRequest) {
     let rowsOutOfScope = 0;
 
     for (const row of rows) {
-      const key = `${row.basicAccountNo}|${row.division}`;
+      const key = `${row.basicAccountNo}|${row.division ?? ''}`;
       const gl = glLookup.get(key);
       if (!gl) { rowsOutOfScope++; continue; }
 
@@ -122,6 +135,8 @@ export async function POST(req: NextRequest) {
       affectedWeeks.add(weekISO);
       rowsImported++;
     }
+
+    console.log('[confirm] processing', rowsImported, 'rows across', affectedWeeks.size, 'weeks');
 
     // ── Find prior week end_balances for beg_balance chaining ────────────────
     // For each affected week, find the prior week_ending from the weeks table
@@ -179,7 +194,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (txWeekEndings.length > 0) {
-      console.log('[confirm] bulk-inserting transactions', { count: txWeekEndings.length });
       await sql`
         INSERT INTO weekly_transactions (
           week_ending, gl_account_id, basic_account_no, division,
@@ -203,57 +217,77 @@ export async function POST(req: NextRequest) {
       `;
     }
 
-    // ── Upsert balances per bucket ───────────────────────────────────────────
-    for (const [, bucket] of buckets) {
-      // Compute beg_balance from prior week or existing beg
+    // ── Batch-load existing beg_balances for all (week, glId) pairs ──────────
+    const existingBalMap = new Map<string, number>();
+    if (buckets.size > 0) {
+      const balWeekEndings: string[] = [];
+      const balGlIds: number[] = [];
+      for (const b of buckets.values()) {
+        balWeekEndings.push(b.weekEnding);
+        balGlIds.push(b.glId);
+      }
+      const existingRows = await sql`
+        SELECT week_ending::text AS week_ending, gl_account_id, beg_balance
+        FROM weekly_balances
+        WHERE (week_ending, gl_account_id) IN (
+          SELECT * FROM UNNEST(${balWeekEndings}::date[], ${balGlIds}::int[])
+        )
+      `;
+      for (const r of existingRows) {
+        const key = `${String(r.week_ending)}|${Number(r.gl_account_id)}`;
+        existingBalMap.set(key, parseFloat(String(r.beg_balance)));
+      }
+    }
+
+    // ── Bulk upsert all weekly_balances rows in one statement ────────────────
+    const balWeekArr: string[] = [];
+    const balGlIdArr: number[] = [];
+    const balBegArr: number[] = [];
+    const balEndArr: number[] = [];
+    const balDrArr: number[] = [];
+    const balCrArr: number[] = [];
+
+    for (const bucket of buckets.values()) {
       const priorMap = priorEndMap.get(bucket.weekEnding);
       const priorEnd = priorMap?.get(bucket.glId) ?? 0;
-
-      // Check if we already have a beg_balance for this (week, account)
-      const existingBal = await sql`
-        SELECT beg_balance, end_balance FROM weekly_balances
-        WHERE week_ending = ${bucket.weekEnding}::date AND gl_account_id = ${bucket.glId}
-      `;
-
-      const begBalance = existingBal.length > 0
-        ? parseFloat(String(existingBal[0].beg_balance))
+      const existingKey = `${bucket.weekEnding}|${bucket.glId}`;
+      const begBalance = existingBalMap.has(existingKey)
+        ? existingBalMap.get(existingKey)!
         : priorEnd;
+      const endBalance = bucket.normalBalance === "debit"
+        ? begBalance + bucket.debits - bucket.credits
+        : begBalance - bucket.debits + bucket.credits;
 
-      // Compute end_balance based on normal_balance
-      let endBalance: number;
-      if (bucket.normalBalance === "debit") {
-        endBalance = begBalance + bucket.debits - bucket.credits;
-      } else {
-        endBalance = begBalance - bucket.debits + bucket.credits;
-      }
+      balWeekArr.push(bucket.weekEnding);
+      balGlIdArr.push(bucket.glId);
+      balBegArr.push(begBalance);
+      balEndArr.push(endBalance);
+      balDrArr.push(bucket.debits);
+      balCrArr.push(bucket.credits);
+    }
 
-      console.log('[confirm] upserting balance', { week: bucket.weekEnding, glId: bucket.glId, begBalance, endBalance, debits: bucket.debits, credits: bucket.credits });
+    if (balWeekArr.length > 0) {
       await sql`
         INSERT INTO weekly_balances
           (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
-        VALUES (
-          ${bucket.weekEnding}::date,
-          ${bucket.glId},
-          ${begBalance},
-          ${endBalance},
-          ${bucket.debits},
-          ${bucket.credits}
+        SELECT * FROM UNNEST(
+          ${balWeekArr}::date[],
+          ${balGlIdArr}::int[],
+          ${balBegArr}::numeric[],
+          ${balEndArr}::numeric[],
+          ${balDrArr}::numeric[],
+          ${balCrArr}::numeric[]
         )
-        ON CONFLICT (week_ending, gl_account_id) DO UPDATE
-          SET period_debit  = weekly_balances.period_debit  + EXCLUDED.period_debit,
-              period_credit = weekly_balances.period_credit + EXCLUDED.period_credit,
-              end_balance   = CASE
-                WHEN (SELECT normal_balance FROM gl_accounts WHERE id = EXCLUDED.gl_account_id) = 'debit'
-                  THEN weekly_balances.beg_balance + (weekly_balances.period_debit + EXCLUDED.period_debit)
-                                                   - (weekly_balances.period_credit + EXCLUDED.period_credit)
-                ELSE weekly_balances.beg_balance - (weekly_balances.period_debit + EXCLUDED.period_debit)
-                                                 + (weekly_balances.period_credit + EXCLUDED.period_credit)
-              END
+        ON CONFLICT (week_ending, gl_account_id) DO UPDATE SET
+          beg_balance   = EXCLUDED.beg_balance,
+          period_debit  = EXCLUDED.period_debit,
+          period_credit = EXCLUDED.period_credit
       `;
     }
 
-    // ── Mark affected weeks as confirmed ─────────────────────────────────────
-    for (const weekISO of affectedWeeks) {
+    // ── End-balance sweep: single UPDATE covering every affected week ────────
+    const weeksArr = Array.from(affectedWeeks);
+    if (weeksArr.length > 0) {
       await sql`
         UPDATE weekly_balances b
         SET end_balance = b.beg_balance +
@@ -263,11 +297,15 @@ export async function POST(req: NextRequest) {
           END
         FROM gl_accounts a
         WHERE b.gl_account_id = a.id
-          AND b.week_ending = ${weekISO}::date
+          AND b.week_ending = ANY(${weeksArr}::date[])
       `;
+    }
+
+    // ── Mark affected weeks as confirmed ─────────────────────────────────────
+    if (weeksArr.length > 0) {
       await sql`
         UPDATE weeks SET is_confirmed = true, confirmed_at = NOW()
-        WHERE week_ending = ${weekISO}::date
+        WHERE week_ending = ANY(${weeksArr}::date[])
       `;
     }
 
@@ -294,6 +332,8 @@ export async function POST(req: NextRequest) {
 
     // ── Cleanup staging ───────────────────────────────────────────────────────
     await sql`DELETE FROM import_staging WHERE session_id = ${sessionId}`;
+
+    console.log('[confirm] done');
 
     return NextResponse.json({
       success: true,
