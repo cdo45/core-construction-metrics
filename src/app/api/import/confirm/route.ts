@@ -25,9 +25,11 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Load staged rows ──────────────────────────────────────────────────────
+    console.log('[confirm] step 1 START: load staging rows');
     const staging = await sql`
       SELECT filename, rows FROM import_staging WHERE session_id = ${sessionId}
     `;
+    console.log('[confirm] step 1 DONE: loaded', staging.length, 'rows');
     if (staging.length === 0) {
       return NextResponse.json(
         { error: "Session not found or already committed." },
@@ -63,6 +65,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (lookupAcctNos.length > 0) {
+      console.log('[confirm] step 2 START: gl lookup for', lookupAcctNos.length, 'unique keys');
       const glRows = await sql`
         SELECT id, account_no, division, normal_balance, category_id
         FROM gl_accounts
@@ -70,6 +73,7 @@ export async function POST(req: NextRequest) {
           SELECT * FROM UNNEST(${lookupAcctNos}::int[], ${lookupDivisions}::text[])
         )
       `;
+      console.log('[confirm] step 2 DONE: found', glRows.length, 'gl_accounts rows');
       for (const r of glRows) {
         const key = `${Number(r.account_no)}|${String(r.division ?? '')}`;
         glLookup.set(key, {
@@ -84,11 +88,13 @@ export async function POST(req: NextRequest) {
     const allDates = rows.map((r) => r.dateBooked);
     const minISO = toISO(new Date(Math.min(...allDates.map((d) => d.getTime()))));
     const maxISO = toISO(new Date(Math.max(...allDates.map((d) => d.getTime()))));
+    console.log('[confirm] step 3 START: existing dedupe hashes', minISO, '→', maxISO);
     const existingHashRows = await sql`
       SELECT dedupe_hash FROM weekly_transactions
       WHERE week_ending BETWEEN ${minISO}::date AND ${maxISO}::date
         AND dedupe_hash IS NOT NULL
     `;
+    console.log('[confirm] step 3 DONE: found', existingHashRows.length, 'existing hashes');
     const existingHashes = new Set(existingHashRows.map((r) => String(r.dedupe_hash)));
 
     // ── Bucket new (non-duplicate) rows by (weekISO, glId) ───────────────────
@@ -141,23 +147,29 @@ export async function POST(req: NextRequest) {
     // ── Find prior week end_balances for beg_balance chaining ────────────────
     // For each affected week, find the prior week_ending from the weeks table
     const priorEndMap = new Map<string, Map<number, number>>(); // weekISO → Map<glId, endBal>
+    console.log('[confirm] step 4 START: priorEndMap build over', affectedWeeks.size, 'weeks');
     for (const weekISO of affectedWeeks) {
+      console.log('[confirm] step 4a START: priorWeek lookup for', weekISO);
       const priorRows = await sql`
         SELECT week_ending::text FROM weeks
         WHERE week_ending < ${weekISO}::date
         ORDER BY week_ending DESC LIMIT 1
       `;
+      console.log('[confirm] step 4a DONE:', priorRows.length, 'prior week rows');
       if (priorRows.length === 0) continue;
       const priorWeek = String(priorRows[0].week_ending);
 
+      console.log('[confirm] step 4b START: balRows for priorWeek', priorWeek);
       const balRows = await sql`
         SELECT gl_account_id, end_balance FROM weekly_balances
         WHERE week_ending = ${priorWeek}::date
       `;
+      console.log('[confirm] step 4b DONE:', balRows.length, 'balance rows');
       const glMap = new Map<number, number>();
       for (const r of balRows) glMap.set(Number(r.gl_account_id), parseFloat(String(r.end_balance)));
       priorEndMap.set(weekISO, glMap);
     }
+    console.log('[confirm] step 4 DONE');
 
     // ── Persist: bulk-insert all transactions in one statement ───────────────
     const txWeekEndings: string[] = [];
@@ -194,6 +206,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (txWeekEndings.length > 0) {
+      console.log('[confirm] step 5 START: bulk INSERT weekly_transactions, count=', txWeekEndings.length);
       await sql`
         INSERT INTO weekly_transactions (
           week_ending, gl_account_id, basic_account_no, division,
@@ -215,6 +228,7 @@ export async function POST(req: NextRequest) {
           ${txHashes}::text[]
         )
       `;
+      console.log('[confirm] step 5 DONE');
     }
 
     // ── Batch-load existing beg_balances for all (week, glId) pairs ──────────
@@ -226,6 +240,7 @@ export async function POST(req: NextRequest) {
         balWeekEndings.push(b.weekEnding);
         balGlIds.push(b.glId);
       }
+      console.log('[confirm] step 6 START: existingBal lookup for', buckets.size, 'buckets');
       const existingRows = await sql`
         SELECT week_ending::text AS week_ending, gl_account_id, beg_balance
         FROM weekly_balances
@@ -233,6 +248,7 @@ export async function POST(req: NextRequest) {
           SELECT * FROM UNNEST(${balWeekEndings}::date[], ${balGlIds}::int[])
         )
       `;
+      console.log('[confirm] step 6 DONE:', existingRows.length, 'existing balance rows');
       for (const r of existingRows) {
         const key = `${String(r.week_ending)}|${Number(r.gl_account_id)}`;
         existingBalMap.set(key, parseFloat(String(r.beg_balance)));
@@ -267,6 +283,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (balWeekArr.length > 0) {
+      console.log('[confirm] step 7 START: bulk upsert weekly_balances, count=', balWeekArr.length);
       await sql`
         INSERT INTO weekly_balances
           (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
@@ -283,11 +300,13 @@ export async function POST(req: NextRequest) {
           period_debit  = EXCLUDED.period_debit,
           period_credit = EXCLUDED.period_credit
       `;
+      console.log('[confirm] step 7 DONE');
     }
 
     // ── End-balance sweep: single UPDATE covering every affected week ────────
     const weeksArr = Array.from(affectedWeeks);
     if (weeksArr.length > 0) {
+      console.log('[confirm] step 8 START: end_balance sweep for', weeksArr.length, 'weeks');
       await sql`
         UPDATE weekly_balances b
         SET end_balance = b.beg_balance +
@@ -299,14 +318,17 @@ export async function POST(req: NextRequest) {
         WHERE b.gl_account_id = a.id
           AND b.week_ending = ANY(${weeksArr}::date[])
       `;
+      console.log('[confirm] step 8 DONE');
     }
 
     // ── Mark affected weeks as confirmed ─────────────────────────────────────
     if (weeksArr.length > 0) {
+      console.log('[confirm] step 9 START: weeks UPDATE');
       await sql`
         UPDATE weeks SET is_confirmed = true, confirmed_at = NOW()
         WHERE week_ending = ANY(${weeksArr}::date[])
       `;
+      console.log('[confirm] step 9 DONE');
     }
 
     // ── Log to import_log ─────────────────────────────────────────────────────
@@ -314,6 +336,7 @@ export async function POST(req: NextRequest) {
     const status = rowsDuplicate > 0 || rowsOutOfScope > 0 ? "partial" : "success";
     const weeksTouched = Array.from(affectedWeeks).sort();
 
+    console.log('[confirm] step 10 START: import_log INSERT');
     await sql`
       INSERT INTO import_log
         (filename, imported_at, weeks_touched, rows_total, rows_imported,
@@ -329,9 +352,12 @@ export async function POST(req: NextRequest) {
         ${status}
       )
     `;
+    console.log('[confirm] step 10 DONE');
 
     // ── Cleanup staging ───────────────────────────────────────────────────────
+    console.log('[confirm] step 11 START: delete staging');
     await sql`DELETE FROM import_staging WHERE session_id = ${sessionId}`;
+    console.log('[confirm] step 11 DONE');
 
     console.log('[confirm] done');
 
@@ -344,8 +370,14 @@ export async function POST(req: NextRequest) {
       weeksCommitted: weeksTouched,
     });
   } catch (err) {
-    console.error('[confirm error]', err);
-    console.error('[confirm error stack]', err instanceof Error ? err.stack : null);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const e = err as { message?: string; code?: string; detail?: string; stack?: string };
+    console.error('[confirm] CAUGHT ERROR', JSON.stringify({
+      message: e?.message,
+      code: e?.code,
+      detail: e?.detail,
+      stack: e?.stack,
+      full: String(err),
+    }));
+    return NextResponse.json({ error: e?.message ?? 'unknown' }, { status: 500 });
   }
 }
