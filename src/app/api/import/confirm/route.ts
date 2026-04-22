@@ -333,7 +333,7 @@ export async function POST(req: NextRequest) {
 
     // ── Log to import_log ─────────────────────────────────────────────────────
     const rowsTotal = rowsImported + rowsDuplicate + rowsOutOfScope;
-    const status = rowsDuplicate > 0 || rowsOutOfScope > 0 ? "partial" : "success";
+    const status = rowsOutOfScope > 0 ? "failed" : "confirmed";
     const weeksTouched = Array.from(affectedWeeks).sort();
 
     console.log('[confirm] step 10 START: import_log INSERT');
