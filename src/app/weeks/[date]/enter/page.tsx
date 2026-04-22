@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import CSVImporter from "@/components/CSVImporter";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -521,15 +520,6 @@ export default function EnterWeekPage({
         </div>
       ) : (
         <div className="flex flex-col gap-5">
-          {/* CSV Import */}
-          <CSVImporter
-            weekEnding={date}
-            onImportComplete={() => {
-              setLoading(true);
-              loadBalances();
-            }}
-          />
-
           {/* Balance entry sections by category */}
           {categoryGroups.map((g) => (
             <CategoryEnterSection
