@@ -284,8 +284,9 @@ export async function POST(req: NextRequest) {
       `;
     }
 
-    // ── Mark affected weeks as confirmed ─────────────────────────────────────
-    for (const weekISO of affectedWeeks) {
+    // ── End-balance sweep: single UPDATE covering every affected week ────────
+    const weeksArr = Array.from(affectedWeeks);
+    if (weeksArr.length > 0) {
       await sql`
         UPDATE weekly_balances b
         SET end_balance = b.beg_balance +
@@ -295,8 +296,12 @@ export async function POST(req: NextRequest) {
           END
         FROM gl_accounts a
         WHERE b.gl_account_id = a.id
-          AND b.week_ending = ${weekISO}::date
+          AND b.week_ending = ANY(${weeksArr}::date[])
       `;
+    }
+
+    // ── Mark affected weeks as confirmed ─────────────────────────────────────
+    for (const weekISO of affectedWeeks) {
       await sql`
         UPDATE weeks SET is_confirmed = true, confirmed_at = NOW()
         WHERE week_ending = ${weekISO}::date
