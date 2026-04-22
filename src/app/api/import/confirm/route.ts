@@ -136,6 +136,8 @@ export async function POST(req: NextRequest) {
       rowsImported++;
     }
 
+    console.log('[confirm] processing', rowsImported, 'rows across', affectedWeeks.size, 'weeks');
+
     // ── Find prior week end_balances for beg_balance chaining ────────────────
     // For each affected week, find the prior week_ending from the weeks table
     const priorEndMap = new Map<string, Map<number, number>>(); // weekISO → Map<glId, endBal>
@@ -192,7 +194,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (txWeekEndings.length > 0) {
-      console.log('[confirm] bulk-inserting transactions', { count: txWeekEndings.length });
       await sql`
         INSERT INTO weekly_transactions (
           week_ending, gl_account_id, basic_account_no, division,
@@ -301,10 +302,10 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Mark affected weeks as confirmed ─────────────────────────────────────
-    for (const weekISO of affectedWeeks) {
+    if (weeksArr.length > 0) {
       await sql`
         UPDATE weeks SET is_confirmed = true, confirmed_at = NOW()
-        WHERE week_ending = ${weekISO}::date
+        WHERE week_ending = ANY(${weeksArr}::date[])
       `;
     }
 
@@ -331,6 +332,8 @@ export async function POST(req: NextRequest) {
 
     // ── Cleanup staging ───────────────────────────────────────────────────────
     await sql`DELETE FROM import_staging WHERE session_id = ${sessionId}`;
+
+    console.log('[confirm] done');
 
     return NextResponse.json({
       success: true,
