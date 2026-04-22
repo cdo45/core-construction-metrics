@@ -153,11 +153,12 @@ export async function POST(req: NextRequest) {
         const hash = buildDedupeHash(weekISO, row.basicAccountNo, row.division, row.auditNumber, row.transactionNo);
         await sql`
           INSERT INTO weekly_transactions
-            (week_ending, gl_account_id, date_booked, journal_no, audit_number, transaction_no,
+            (week_ending, gl_account_id, basic_account_no, date_booked, journal_no, audit_number, transaction_no,
              job_no, description, debit, credit, vendor_no, dedupe_hash)
           VALUES (
             ${weekISO}::date,
             ${bucket.glId},
+            ${row.basicAccountNo},
             ${toISO(row.dateBooked)}::date,
             ${row.journalNo},
             ${row.auditNumber},
