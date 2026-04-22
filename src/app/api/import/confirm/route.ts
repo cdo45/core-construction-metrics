@@ -151,6 +151,7 @@ export async function POST(req: NextRequest) {
         const bounds = computeWeekEnding(row.dateBooked);
         const weekISO = toISO(bounds.weekEnding);
         const hash = buildDedupeHash(weekISO, row.basicAccountNo, row.division, row.auditNumber, row.debit, row.credit);
+        console.log('[confirm] inserting tx', { week: weekISO, account: row.basicAccountNo, div: row.division });
         await sql`
           INSERT INTO weekly_transactions
             (week_ending, gl_account_id, basic_account_no, division, date_booked, audit_number,
@@ -194,6 +195,7 @@ export async function POST(req: NextRequest) {
         endBalance = begBalance - bucket.debits + bucket.credits;
       }
 
+      console.log('[confirm] upserting balance', { week: bucket.weekEnding, glId: bucket.glId, begBalance, endBalance, debits: bucket.debits, credits: bucket.credits });
       await sql`
         INSERT INTO weekly_balances
           (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
@@ -270,7 +272,8 @@ export async function POST(req: NextRequest) {
       weeksCommitted: weeksTouched,
     });
   } catch (err) {
-    console.error("POST /api/import/confirm error:", err);
+    console.error('[confirm error]', err);
+    console.error('[confirm error stack]', err instanceof Error ? err.stack : null);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
