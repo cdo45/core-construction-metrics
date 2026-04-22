@@ -144,35 +144,67 @@ export async function POST(req: NextRequest) {
       priorEndMap.set(weekISO, glMap);
     }
 
-    // ── Persist: insert transactions + upsert balances ────────────────────────
-    for (const [, bucket] of buckets) {
-      // Insert transaction rows
+    // ── Persist: bulk-insert all transactions in one statement ───────────────
+    const txWeekEndings: string[] = [];
+    const txGlIds: number[] = [];
+    const txBasicAccountNos: number[] = [];
+    const txDivisions: string[] = [];
+    const txDateBookeds: string[] = [];
+    const txAuditNumbers: string[] = [];
+    const txJobNos: string[] = [];
+    const txDescriptions: string[] = [];
+    const txDebits: number[] = [];
+    const txCredits: number[] = [];
+    const txVendorNos: string[] = [];
+    const txHashes: string[] = [];
+
+    for (const bucket of buckets.values()) {
       for (const row of bucket.rowsToInsert) {
         const bounds = computeWeekEnding(row.dateBooked);
         const weekISO = toISO(bounds.weekEnding);
         const hash = buildDedupeHash(weekISO, row.basicAccountNo, row.division, row.auditNumber, row.debit, row.credit);
-        console.log('[confirm] inserting tx', { week: weekISO, account: row.basicAccountNo, div: row.division });
-        await sql`
-          INSERT INTO weekly_transactions
-            (week_ending, gl_account_id, basic_account_no, division, date_booked, audit_number,
-             job_no, description, debit, credit, vendor_no, dedupe_hash)
-          VALUES (
-            ${weekISO}::date,
-            ${bucket.glId},
-            ${row.basicAccountNo},
-            ${row.division ?? ''},
-            ${toISO(row.dateBooked)}::date,
-            ${row.auditNumber},
-            ${row.jobNo},
-            ${row.description},
-            ${row.debit},
-            ${row.credit},
-            ${row.vendorNo},
-            ${hash}
-          )
-        `;
+        txWeekEndings.push(weekISO);
+        txGlIds.push(bucket.glId);
+        txBasicAccountNos.push(row.basicAccountNo);
+        txDivisions.push(row.division ?? '');
+        txDateBookeds.push(toISO(row.dateBooked));
+        txAuditNumbers.push(row.auditNumber);
+        txJobNos.push(row.jobNo);
+        txDescriptions.push(row.description);
+        txDebits.push(row.debit);
+        txCredits.push(row.credit);
+        txVendorNos.push(row.vendorNo);
+        txHashes.push(hash);
       }
+    }
 
+    if (txWeekEndings.length > 0) {
+      console.log('[confirm] bulk-inserting transactions', { count: txWeekEndings.length });
+      await sql`
+        INSERT INTO weekly_transactions (
+          week_ending, gl_account_id, basic_account_no, division,
+          date_booked, audit_number, job_no, description,
+          debit, credit, vendor_no, dedupe_hash
+        )
+        SELECT * FROM UNNEST(
+          ${txWeekEndings}::date[],
+          ${txGlIds}::int[],
+          ${txBasicAccountNos}::int[],
+          ${txDivisions}::text[],
+          ${txDateBookeds}::date[],
+          ${txAuditNumbers}::text[],
+          ${txJobNos}::text[],
+          ${txDescriptions}::text[],
+          ${txDebits}::numeric[],
+          ${txCredits}::numeric[],
+          ${txVendorNos}::text[],
+          ${txHashes}::text[]
+        )
+      `;
+    }
+
+    // ── Upsert balances per bucket ───────────────────────────────────────────
+    for (const [, bucket] of buckets) {
       // Compute beg_balance from prior week or existing beg
       const priorMap = priorEndMap.get(bucket.weekEnding);
       const priorEnd = priorMap?.get(bucket.glId) ?? 0;
