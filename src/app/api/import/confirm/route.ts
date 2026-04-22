@@ -216,20 +216,37 @@ export async function POST(req: NextRequest) {
       `;
     }
 
+    // ── Batch-load existing beg_balances for all (week, glId) pairs ──────────
+    const existingBalMap = new Map<string, number>();
+    if (buckets.size > 0) {
+      const balWeekEndings: string[] = [];
+      const balGlIds: number[] = [];
+      for (const b of buckets.values()) {
+        balWeekEndings.push(b.weekEnding);
+        balGlIds.push(b.glId);
+      }
+      const existingRows = await sql`
+        SELECT week_ending::text AS week_ending, gl_account_id, beg_balance
+        FROM weekly_balances
+        WHERE (week_ending, gl_account_id) IN (
+          SELECT * FROM UNNEST(${balWeekEndings}::date[], ${balGlIds}::int[])
+        )
+      `;
+      for (const r of existingRows) {
+        const key = `${String(r.week_ending)}|${Number(r.gl_account_id)}`;
+        existingBalMap.set(key, parseFloat(String(r.beg_balance)));
+      }
+    }
+
     // ── Upsert balances per bucket ───────────────────────────────────────────
     for (const [, bucket] of buckets) {
       // Compute beg_balance from prior week or existing beg
       const priorMap = priorEndMap.get(bucket.weekEnding);
       const priorEnd = priorMap?.get(bucket.glId) ?? 0;
 
-      // Check if we already have a beg_balance for this (week, account)
-      const existingBal = await sql`
-        SELECT beg_balance, end_balance FROM weekly_balances
-        WHERE week_ending = ${bucket.weekEnding}::date AND gl_account_id = ${bucket.glId}
-      `;
-
-      const begBalance = existingBal.length > 0
-        ? parseFloat(String(existingBal[0].beg_balance))
+      const existingKey = `${bucket.weekEnding}|${bucket.glId}`;
+      const begBalance = existingBalMap.has(existingKey)
+        ? existingBalMap.get(existingKey)!
         : priorEnd;
 
       // Compute end_balance based on normal_balance
