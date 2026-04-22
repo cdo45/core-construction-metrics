@@ -238,47 +238,49 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Upsert balances per bucket ───────────────────────────────────────────
-    for (const [, bucket] of buckets) {
-      // Compute beg_balance from prior week or existing beg
+    // ── Bulk upsert all weekly_balances rows in one statement ────────────────
+    const balWeekArr: string[] = [];
+    const balGlIdArr: number[] = [];
+    const balBegArr: number[] = [];
+    const balEndArr: number[] = [];
+    const balDrArr: number[] = [];
+    const balCrArr: number[] = [];
+
+    for (const bucket of buckets.values()) {
       const priorMap = priorEndMap.get(bucket.weekEnding);
       const priorEnd = priorMap?.get(bucket.glId) ?? 0;
-
       const existingKey = `${bucket.weekEnding}|${bucket.glId}`;
       const begBalance = existingBalMap.has(existingKey)
         ? existingBalMap.get(existingKey)!
         : priorEnd;
+      const endBalance = bucket.normalBalance === "debit"
+        ? begBalance + bucket.debits - bucket.credits
+        : begBalance - bucket.debits + bucket.credits;
 
-      // Compute end_balance based on normal_balance
-      let endBalance: number;
-      if (bucket.normalBalance === "debit") {
-        endBalance = begBalance + bucket.debits - bucket.credits;
-      } else {
-        endBalance = begBalance - bucket.debits + bucket.credits;
-      }
+      balWeekArr.push(bucket.weekEnding);
+      balGlIdArr.push(bucket.glId);
+      balBegArr.push(begBalance);
+      balEndArr.push(endBalance);
+      balDrArr.push(bucket.debits);
+      balCrArr.push(bucket.credits);
+    }
 
-      console.log('[confirm] upserting balance', { week: bucket.weekEnding, glId: bucket.glId, begBalance, endBalance, debits: bucket.debits, credits: bucket.credits });
+    if (balWeekArr.length > 0) {
       await sql`
         INSERT INTO weekly_balances
           (week_ending, gl_account_id, beg_balance, end_balance, period_debit, period_credit)
-        VALUES (
-          ${bucket.weekEnding}::date,
-          ${bucket.glId},
-          ${begBalance},
-          ${endBalance},
-          ${bucket.debits},
-          ${bucket.credits}
+        SELECT * FROM UNNEST(
+          ${balWeekArr}::date[],
+          ${balGlIdArr}::int[],
+          ${balBegArr}::numeric[],
+          ${balEndArr}::numeric[],
+          ${balDrArr}::numeric[],
+          ${balCrArr}::numeric[]
         )
-        ON CONFLICT (week_ending, gl_account_id) DO UPDATE
-          SET period_debit  = weekly_balances.period_debit  + EXCLUDED.period_debit,
-              period_credit = weekly_balances.period_credit + EXCLUDED.period_credit,
-              end_balance   = CASE
-                WHEN (SELECT normal_balance FROM gl_accounts WHERE id = EXCLUDED.gl_account_id) = 'debit'
-                  THEN weekly_balances.beg_balance + (weekly_balances.period_debit + EXCLUDED.period_debit)
-                                                   - (weekly_balances.period_credit + EXCLUDED.period_credit)
-                ELSE weekly_balances.beg_balance - (weekly_balances.period_debit + EXCLUDED.period_debit)
-                                                 + (weekly_balances.period_credit + EXCLUDED.period_credit)
-              END
+        ON CONFLICT (week_ending, gl_account_id) DO UPDATE SET
+          beg_balance   = EXCLUDED.beg_balance,
+          period_debit  = EXCLUDED.period_debit,
+          period_credit = EXCLUDED.period_credit
       `;
     }
 
