@@ -45,24 +45,37 @@ export async function POST(req: NextRequest) {
     }));
 
     // ── GL account lookup: (account_no, division) → { id, normalBalance, categoryId } ─
-    const uniqueKeys = new Set(rows.map((r) => `${r.basicAccountNo}|${r.division}`));
+    // Single UNNEST query to batch all lookups instead of one SELECT per unique key
     const glLookup = new Map<
       string,
       { id: number; normalBalance: string; categoryId: number | null }
     >();
-    for (const key of uniqueKeys) {
-      const [acctStr, div] = key.split("|");
-      const dbRows = await sql`
-        SELECT id, normal_balance, category_id
+
+    const lookupAcctNos: number[] = [];
+    const lookupDivisions: string[] = [];
+    const seenKeys = new Set<string>();
+    for (const r of rows) {
+      const key = `${r.basicAccountNo}|${r.division ?? ''}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      lookupAcctNos.push(r.basicAccountNo);
+      lookupDivisions.push(r.division ?? '');
+    }
+
+    if (lookupAcctNos.length > 0) {
+      const glRows = await sql`
+        SELECT id, account_no, division, normal_balance, category_id
         FROM gl_accounts
-        WHERE account_no = ${parseInt(acctStr, 10)} AND division = ${div}
-        LIMIT 1
+        WHERE (account_no, division) IN (
+          SELECT * FROM UNNEST(${lookupAcctNos}::int[], ${lookupDivisions}::text[])
+        )
       `;
-      if (dbRows.length > 0) {
+      for (const r of glRows) {
+        const key = `${Number(r.account_no)}|${String(r.division ?? '')}`;
         glLookup.set(key, {
-          id: Number(dbRows[0].id),
-          normalBalance: String(dbRows[0].normal_balance),
-          categoryId: dbRows[0].category_id != null ? Number(dbRows[0].category_id) : null,
+          id: Number(r.id),
+          normalBalance: String(r.normal_balance),
+          categoryId: r.category_id != null ? Number(r.category_id) : null,
         });
       }
     }
@@ -95,7 +108,7 @@ export async function POST(req: NextRequest) {
     let rowsOutOfScope = 0;
 
     for (const row of rows) {
-      const key = `${row.basicAccountNo}|${row.division}`;
+      const key = `${row.basicAccountNo}|${row.division ?? ''}`;
       const gl = glLookup.get(key);
       if (!gl) { rowsOutOfScope++; continue; }
 
