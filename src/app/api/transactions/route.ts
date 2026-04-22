@@ -5,17 +5,15 @@ import { getDb } from "@/lib/db";
 
 export interface TransactionRow {
   id: number;
-  trx_date: string | null;
-  journal: string | null;
-  audit_no: string | null;
-  gl_trx_no: string | null;
-  line: string | null;
-  job: string | null;
+  date_booked: string | null;
+  journal_no: string | null;
+  audit_number: string | null;
+  transaction_no: string | null;
+  job_no: string | null;
   description: string | null;
   debit: number;
   credit: number;
-  vendor_cust_no: string | null;
-  trx_no: string | null;
+  vendor_no: string | null;
 }
 
 export interface TransactionSummary {
@@ -86,21 +84,19 @@ export async function GET(req: NextRequest) {
     const trxRows = await sql`
       SELECT
         id,
-        trx_date::text,
-        journal,
-        audit_no,
-        gl_trx_no,
-        line,
-        job,
+        date_booked::text,
+        journal_no,
+        audit_number,
+        transaction_no,
+        job_no,
         description,
         debit::numeric  AS debit,
         credit::numeric AS credit,
-        vendor_cust_no,
-        trx_no
+        vendor_no
       FROM weekly_transactions
       WHERE week_ending = ${weekEnding}
         AND gl_account_id = ${gl_account_id}
-      ORDER BY trx_date NULLS LAST, gl_trx_no, id
+      ORDER BY date_booked NULLS LAST, transaction_no, id
     `;
 
     // Fetch balance for this week
@@ -116,18 +112,16 @@ export async function GET(req: NextRequest) {
     const end_balance = balRows.length > 0 ? n(balRows[0].end_balance) : 0;
 
     const transactions: TransactionRow[] = trxRows.map((r) => ({
-      id:            Number(r.id),
-      trx_date:      r.trx_date as string | null,
-      journal:       r.journal as string | null,
-      audit_no:      r.audit_no as string | null,
-      gl_trx_no:     r.gl_trx_no as string | null,
-      line:          r.line as string | null,
-      job:           r.job as string | null,
-      description:   r.description as string | null,
-      debit:         n(r.debit),
-      credit:        n(r.credit),
-      vendor_cust_no: r.vendor_cust_no as string | null,
-      trx_no:        r.trx_no as string | null,
+      id:             Number(r.id),
+      date_booked:    r.date_booked as string | null,
+      journal_no:     r.journal_no as string | null,
+      audit_number:   r.audit_number as string | null,
+      transaction_no: r.transaction_no as string | null,
+      job_no:         r.job_no as string | null,
+      description:    r.description as string | null,
+      debit:          n(r.debit),
+      credit:         n(r.credit),
+      vendor_no:      r.vendor_no as string | null,
     }));
 
     const total_debits  = transactions.reduce((s, t) => s + t.debit, 0);
