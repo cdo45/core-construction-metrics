@@ -91,17 +91,18 @@ export async function POST(req: NextRequest) {
     const buckets = new Map<string, RowBucket>();
     const affectedWeeks = new Set<string>();
     let rowsImported = 0;
-    let rowsSkipped = 0;
+    let rowsDuplicate = 0;
+    let rowsOutOfScope = 0;
 
     for (const row of rows) {
       const key = `${row.basicAccountNo}|${row.division}`;
       const gl = glLookup.get(key);
-      if (!gl) { rowsSkipped++; continue; }
+      if (!gl) { rowsOutOfScope++; continue; }
 
       const bounds = computeWeekEnding(row.dateBooked);
       const weekISO = toISO(bounds.weekEnding);
       const hash = buildDedupeHash(weekISO, row.basicAccountNo, row.division, row.auditNumber, row.transactionNo);
-      if (existingHashes.has(hash)) { rowsSkipped++; continue; }
+      if (existingHashes.has(hash)) { rowsDuplicate++; continue; }
 
       const bucketKey = `${weekISO}|${gl.id}`;
       if (!buckets.has(bucketKey)) {
@@ -229,16 +230,24 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Log to import_log ─────────────────────────────────────────────────────
+    const rowsTotal = rowsImported + rowsDuplicate + rowsOutOfScope;
+    const status = rowsDuplicate > 0 || rowsOutOfScope > 0 ? "partial" : "success";
+    const weeksTouched = Array.from(affectedWeeks).sort();
+
     await sql`
-      INSERT INTO import_log (filename, rows_imported, rows_skipped, weeks_affected, imported_at)
+      INSERT INTO import_log
+        (filename, imported_at, weeks_touched, rows_total, rows_imported,
+         rows_out_of_scope, rows_duplicate, status)
       VALUES (
         ${filename},
+        NOW(),
+        ${weeksTouched},
+        ${rowsTotal},
         ${rowsImported},
-        ${rowsSkipped},
-        ${Array.from(affectedWeeks).join(",")},
-        NOW()
+        ${rowsOutOfScope},
+        ${rowsDuplicate},
+        ${status}
       )
-      ON CONFLICT DO NOTHING
     `;
 
     // ── Cleanup staging ───────────────────────────────────────────────────────
@@ -247,8 +256,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       rowsImported,
-      rowsSkipped,
-      weeksCommitted: Array.from(affectedWeeks).sort(),
+      rowsSkipped: rowsDuplicate + rowsOutOfScope,
+      rowsDuplicate,
+      rowsOutOfScope,
+      weeksCommitted: weeksTouched,
     });
   } catch (err) {
     console.error("POST /api/import/confirm error:", err);
