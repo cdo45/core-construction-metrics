@@ -369,15 +369,20 @@ export async function POST(req: NextRequest) {
       rowsOutOfScope,
       weeksCommitted: weeksTouched,
     });
-  } catch (err) {
-    const e = err as { message?: string; code?: string; detail?: string; stack?: string };
-    console.error('[confirm] CAUGHT ERROR', JSON.stringify({
-      message: e?.message,
-      code: e?.code,
-      detail: e?.detail,
-      stack: e?.stack,
-      full: String(err),
-    }));
-    return NextResponse.json({ error: e?.message ?? 'unknown' }, { status: 500 });
+  } catch (error: any) {
+    const errorInfo = {
+      message: error?.message,
+      code: error?.code,
+      detail: error?.detail,
+      hint: error?.hint,
+      where: error?.where,
+      table: error?.table,
+      column: error?.column,
+      constraint: error?.constraint,
+      sourceError: error?.sourceError?.message,
+      stack: error?.stack?.split('\n').slice(0,5).join(' | '),
+    };
+    console.error('CONFIRM_ERROR', JSON.stringify(errorInfo));
+    return NextResponse.json({ error: 'confirm_failed', debug: errorInfo }, { status: 500 });
   }
 }
