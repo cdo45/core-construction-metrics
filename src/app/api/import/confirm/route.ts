@@ -348,8 +348,34 @@ export async function POST(req: NextRequest) {
         console.log('[confirm] week', weekISO, 'step b DONE');
       }
 
+      // (c2) Recompute period_debit / period_credit from the authoritative
+      //      source: the SUM of weekly_transactions for this (week, account).
+      //      This is what makes multi-import-to-same-week correct. The UPSERT
+      //      above wrote per-run bucket sums (e.g. Feb run's $5M DR); this
+      //      UPDATE replaces them with the true cumulative total across all
+      //      imports that have touched this week (e.g. Jan's $13.2M + Feb's
+      //      $5M = $18.2M).
+      console.log('[confirm] week', weekISO, 'step c2 START: recompute period totals from tx SUM');
+      await sql`
+        UPDATE weekly_balances b
+        SET period_debit  = COALESCE(tx.dr, 0),
+            period_credit = COALESCE(tx.cr, 0)
+        FROM (
+          SELECT gl_account_id,
+                 SUM(debit)  AS dr,
+                 SUM(credit) AS cr
+          FROM weekly_transactions
+          WHERE week_ending = ${weekISO}::date
+          GROUP BY gl_account_id
+        ) tx
+        WHERE b.week_ending = ${weekISO}::date
+          AND b.gl_account_id = tx.gl_account_id
+      `;
+      console.log('[confirm] week', weekISO, 'step c2 DONE');
+
       // (d) sweep end_balance for THIS week so the next iteration sees
       //     a correct value when it reads this row as its "prior week".
+      //     Uses the period totals recomputed in step c2 above.
       console.log('[confirm] week', weekISO, 'step c START: end_balance sweep (this week)');
       await sql`
         UPDATE weekly_balances b
