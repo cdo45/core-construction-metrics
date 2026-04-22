@@ -41,17 +41,15 @@ interface CategoryGroup {
 
 interface TrxRow {
   id: number;
-  trx_date: string | null;
-  journal: string | null;
-  audit_no: string | null;
-  gl_trx_no: string | null;
-  line: string | null;
-  job: string | null;
+  date_booked: string | null;
+  journal_no: string | null;
+  audit_number: string | null;
+  transaction_no: string | null;
+  job_no: string | null;
   description: string | null;
   debit: number;
   credit: number;
-  vendor_cust_no: string | null;
-  trx_no: string | null;
+  vendor_no: string | null;
 }
 
 interface TrxSummary {
@@ -248,10 +246,10 @@ function TransactionModal({
                   <tbody>
                     {transactions.map((t) => (
                       <tr key={t.id} className="hover:bg-gray-50">
-                        <td className="table-td text-gray-600 whitespace-nowrap">{t.trx_date ?? "—"}</td>
-                        <td className="table-td text-gray-500">{t.journal}</td>
-                        <td className="table-td font-mono text-gray-500">{t.audit_no}</td>
-                        <td className="table-td text-gray-500">{t.job}</td>
+                        <td className="table-td text-gray-600 whitespace-nowrap">{t.date_booked ?? "—"}</td>
+                        <td className="table-td text-gray-500">{t.journal_no}</td>
+                        <td className="table-td font-mono text-gray-500">{t.audit_number}</td>
+                        <td className="table-td text-gray-500">{t.job_no}</td>
                         <td className="table-td text-gray-800 max-w-[180px] truncate">{t.description}</td>
                         <td className="table-td text-right tabular-nums text-gray-700">
                           {t.debit > 0 ? fmtMoney(t.debit) : ""}
@@ -259,7 +257,7 @@ function TransactionModal({
                         <td className="table-td text-right tabular-nums text-gray-700">
                           {t.credit > 0 ? fmtMoney(t.credit) : ""}
                         </td>
-                        <td className="table-td text-gray-500">{t.vendor_cust_no}</td>
+                        <td className="table-td text-gray-500">{t.vendor_no}</td>
                       </tr>
                     ))}
                   </tbody>
