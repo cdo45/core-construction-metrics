@@ -259,6 +259,32 @@ export async function POST(req: NextRequest) {
 
       // (b) filter buckets for this week, compute beg/end per bucket
       const weekBuckets = [...buckets.values()].filter(b => b.weekEnding === weekISO);
+
+      // Carry-forward: any account with non-zero prior end_balance but no
+      // CSV activity this week needs a synthetic zero-activity bucket so a
+      // weekly_balances row is written for it. Without this, the next week
+      // would read no row and chain from $0, dropping the running balance.
+      // normal_balance value is unused for zero activity (debits=credits=0
+      // makes both CASE branches yield begBalance unchanged).
+      const glIdsInWeek = new Set(weekBuckets.map(b => b.glId));
+      let carryForwardCount = 0;
+      for (const [glId, priorEnd] of priorEndMap) {
+        if (priorEnd === 0) continue;
+        if (glIdsInWeek.has(glId)) continue;
+        weekBuckets.push({
+          weekEnding: weekISO,
+          glId,
+          normalBalance: '',
+          debits: 0,
+          credits: 0,
+          rowsToInsert: [],
+        });
+        carryForwardCount++;
+      }
+      if (carryForwardCount > 0) {
+        console.log('[confirm] week', weekISO, 'carry-forward synthetic buckets:', carryForwardCount);
+      }
+
       const balWeekArr: string[] = [];
       const balGlIdArr: number[] = [];
       const balBegArr: number[] = [];
