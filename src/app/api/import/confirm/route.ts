@@ -344,7 +344,7 @@ export async function POST(req: NextRequest) {
       VALUES (
         ${filename},
         NOW(),
-        ${weeksTouched},
+        ${weeksTouched}::date[],
         ${rowsTotal},
         ${rowsImported},
         ${rowsOutOfScope},
