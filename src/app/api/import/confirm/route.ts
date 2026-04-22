@@ -266,11 +266,27 @@ export async function POST(req: NextRequest) {
       // would read no row and chain from $0, dropping the running balance.
       // normal_balance value is unused for zero activity (debits=credits=0
       // makes both CASE branches yield begBalance unchanged).
+      //
+      // Safety guard: skip accounts that ALREADY have a weekly_balances row
+      // for this week from a prior confirm run. Without this, a re-import
+      // whose CSV rows all dedupe out would produce buckets.size === 0 for
+      // the week, and every non-zero prior-end account would get a synthetic
+      // (0,0) bucket whose UPSERT would clobber the real period_debit /
+      // period_credit via ON CONFLICT DO UPDATE.
+      const existingRowsForWeek = await sql`
+        SELECT gl_account_id FROM weekly_balances
+        WHERE week_ending = ${weekISO}::date
+      `;
+      const existingGlIdsForWeek = new Set<number>(
+        existingRowsForWeek.map(r => Number(r.gl_account_id))
+      );
+
       const glIdsInWeek = new Set(weekBuckets.map(b => b.glId));
       let carryForwardCount = 0;
       for (const [glId, priorEnd] of priorEndMap) {
         if (priorEnd === 0) continue;
         if (glIdsInWeek.has(glId)) continue;
+        if (existingGlIdsForWeek.has(glId)) continue;
         weekBuckets.push({
           weekEnding: weekISO,
           glId,
