@@ -223,6 +223,17 @@ export async function POST(req: NextRequest) {
     // ── Mark affected weeks as confirmed ─────────────────────────────────────
     for (const weekISO of affectedWeeks) {
       await sql`
+        UPDATE weekly_balances b
+        SET end_balance = b.beg_balance +
+          CASE a.normal_balance
+            WHEN 'debit'  THEN (b.period_debit - b.period_credit)
+            WHEN 'credit' THEN (b.period_credit - b.period_debit)
+          END
+        FROM gl_accounts a
+        WHERE b.gl_account_id = a.id
+          AND b.week_ending = ${weekISO}::date
+      `;
+      await sql`
         UPDATE weeks SET is_confirmed = true, confirmed_at = NOW()
         WHERE week_ending = ${weekISO}::date
       `;
