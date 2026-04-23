@@ -57,22 +57,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Unknown category_id ${categoryId}` }, { status: 400 });
     }
 
-    // ── 1. Create or update gl_accounts (handles race) ──────────────────────
+    // ── 1. Create / revive / reject gl_accounts row ─────────────────────────
+    //   - Not found               → INSERT a fresh row.
+    //   - Found with is_active=false (previously excluded) → flip back to
+    //     active and overwrite category/normal_balance/description with what
+    //     the user picked in the activate modal.
+    //   - Found with is_active=true (someone else activated this key already,
+    //     or the excluded list is stale) → 409. Caller should refresh.
     const existing = await sql`
-      SELECT id FROM gl_accounts
+      SELECT id, is_active FROM gl_accounts
       WHERE account_no = ${acctNo} AND division = ${division}
       LIMIT 1
     `;
 
     let glAccountId: number;
     if (existing.length > 0) {
-      glAccountId = Number(existing[0].id);
+      const existingId = Number(existing[0].id);
+      const existingActive = Boolean(existing[0].is_active);
+      if (existingActive) {
+        return NextResponse.json(
+          {
+            error: `Account ${acctNo}${division ? "/" + division : ""} is already active (gl_account_id=${existingId}). Refresh the Excluded list.`,
+            gl_account_id: existingId,
+          },
+          { status: 409 }
+        );
+      }
+      // Reviving a soft-deleted account.
+      glAccountId = existingId;
       await sql`
         UPDATE gl_accounts
-        SET category_id = ${categoryId},
+        SET category_id    = ${categoryId},
             normal_balance = ${normalBalance},
-            description = ${description},
-            is_active = true
+            description    = ${description},
+            is_active      = true
         WHERE id = ${glAccountId}
       `;
     } else {
