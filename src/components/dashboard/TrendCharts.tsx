@@ -1,6 +1,7 @@
 "use client";
 
 import type { WeekMetric } from "@/app/api/metrics/route";
+import { lastActiveWeeks } from "@/lib/active-weeks";
 import {
   LineChart,
   Line,
@@ -88,7 +89,9 @@ function MoneyTooltip({
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export default function TrendCharts({ weeks }: { weeks: WeekMetric[] }) {
-  const last12 = weeks.slice(-12);
+  // Last 12 weeks WITH ACTIVITY. Empty trailing weeks would create misleading
+  // flat lines at the end of every chart.
+  const last12 = lastActiveWeeks(weeks, 12);
   const data = last12.map((w) => ({
     week: shortDate(w.week_ending),
     cash: w.cat_1_cash,
