@@ -113,10 +113,53 @@ export async function POST(req: NextRequest) {
     let rowsDuplicate = 0;
     let rowsOutOfScope = 0;
 
+    // Excluded-row accumulators (parallel arrays for one bulk insert below).
+    // Filled when a row's (account_no, division) has no tracked gl_account.
+    const exclSrc: string[] = [];
+    const exclWeek: string[] = [];
+    const exclDate: string[] = [];
+    const exclAcct: string[] = [];
+    const exclDiv: string[] = [];
+    const exclDesc: (string | null)[] = [];
+    const exclAcctDesc: (string | null)[] = [];
+    const exclDr: number[] = [];
+    const exclCr: number[] = [];
+    const exclJournal: (string | null)[] = [];
+    const exclAudit: (string | null)[] = [];
+    const exclTrxNo: (string | null)[] = [];
+    const exclJob: (string | null)[] = [];
+    const exclVendor: (string | null)[] = [];
+    const exclHash: string[] = [];
+    const exclSeenHashes = new Set<string>();
+
     for (const row of rows) {
       const key = `${row.basicAccountNo}|${row.division ?? ''}`;
       const gl = glLookup.get(key);
-      if (!gl) { rowsOutOfScope++; continue; }
+      if (!gl) {
+        rowsOutOfScope++;
+        const bounds = computeWeekEnding(row.dateBooked);
+        const weekISO = toISO(bounds.weekEnding);
+        const hash = buildDedupeHash(weekISO, row.basicAccountNo, row.division ?? '', row.auditNumber, row.debit, row.credit);
+        if (!exclSeenHashes.has(hash)) {
+          exclSeenHashes.add(hash);
+          exclSrc.push(filename);
+          exclWeek.push(weekISO);
+          exclDate.push(toISO(row.dateBooked));
+          exclAcct.push(String(row.basicAccountNo));
+          exclDiv.push(row.division ?? '');
+          exclDesc.push(row.description ?? null);
+          exclAcctDesc.push((row as unknown as { accountsDescription?: string }).accountsDescription ?? null);
+          exclDr.push(row.debit);
+          exclCr.push(row.credit);
+          exclJournal.push((row as unknown as { journalNo?: string }).journalNo ?? null);
+          exclAudit.push(row.auditNumber || null);
+          exclTrxNo.push((row as unknown as { transactionNo?: string }).transactionNo ?? null);
+          exclJob.push(row.jobNo || null);
+          exclVendor.push(row.vendorNo || null);
+          exclHash.push(hash);
+        }
+        continue;
+      }
 
       const bounds = computeWeekEnding(row.dateBooked);
       const weekISO = toISO(bounds.weekEnding);
@@ -176,6 +219,39 @@ export async function POST(req: NextRequest) {
         txVendorNos.push(row.vendorNo);
         txHashes.push(hash);
       }
+    }
+
+    // ── Persist excluded (out-of-scope) rows ─────────────────────────────────
+    // Runs BEFORE weekly_transactions insert so a later failure still leaves an
+    // audit trail. ON CONFLICT (dedupe_hash) DO NOTHING handles re-imports.
+    if (exclHash.length > 0) {
+      console.log('[confirm] step 4.5 START: bulk INSERT excluded_transactions, count=', exclHash.length);
+      await sql`
+        INSERT INTO excluded_transactions (
+          source_file, week_ending, date_booked, basic_account_no, division,
+          description, account_description, debit, credit,
+          journal_no, audit_number, transaction_no, job_no, vendor_no, dedupe_hash
+        )
+        SELECT * FROM UNNEST(
+          ${exclSrc}::text[],
+          ${exclWeek}::date[],
+          ${exclDate}::date[],
+          ${exclAcct}::text[],
+          ${exclDiv}::text[],
+          ${exclDesc}::text[],
+          ${exclAcctDesc}::text[],
+          ${exclDr}::numeric[],
+          ${exclCr}::numeric[],
+          ${exclJournal}::text[],
+          ${exclAudit}::text[],
+          ${exclTrxNo}::text[],
+          ${exclJob}::text[],
+          ${exclVendor}::text[],
+          ${exclHash}::text[]
+        )
+        ON CONFLICT (dedupe_hash) DO NOTHING
+      `;
+      console.log('[confirm] step 4.5 DONE');
     }
 
     if (txWeekEndings.length > 0) {
