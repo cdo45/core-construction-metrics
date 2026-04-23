@@ -257,6 +257,7 @@ export async function GET() {
         FROM weekly_balances wb
         JOIN gl_accounts ga ON ga.id = wb.gl_account_id
         WHERE ga.category_id IS NOT NULL
+          AND ga.is_active = true
         GROUP BY wb.week_ending, ga.category_id
       )
       SELECT
@@ -297,6 +298,7 @@ export async function GET() {
       FROM weekly_balances wb
       JOIN gl_accounts g ON g.id = wb.gl_account_id
       WHERE (g.account_no = 2120 OR LOWER(g.description) LIKE '%insurance%')
+        AND g.is_active = true
       ORDER BY g.account_no, wb.week_ending ASC
     `;
 

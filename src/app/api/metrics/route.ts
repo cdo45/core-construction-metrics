@@ -114,6 +114,7 @@ export async function GET() {
       FROM weekly_balances wb
       JOIN gl_accounts ga ON ga.id = wb.gl_account_id
       WHERE ga.category_id IS NOT NULL
+        AND ga.is_active = true
       GROUP BY wb.week_ending, ga.category_id
       ORDER BY wb.week_ending ASC, ga.category_id ASC
     `;

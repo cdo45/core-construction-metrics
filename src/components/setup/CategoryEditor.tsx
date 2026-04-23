@@ -193,20 +193,29 @@ export default function CategoryEditor({
     });
   }
 
-  // Category pills counts
+  // Category pills counts (active accounts only — inactive are excluded)
   const countByCat = useMemo(() => {
     const map = new Map<number | "null", number>();
     for (const a of accounts) {
+      if (a.is_active === false) continue;
       const k = (a.category_id ?? "null") as number | "null";
       map.set(k, (map.get(k) ?? 0) + 1);
     }
     return map;
   }, [accounts]);
 
+  // Only consider active accounts. Soft-deleted (is_active=false) accounts
+  // are hidden from CategoryEditor; they live in the Excluded list until
+  // re-activated.
+  const activeAccounts = useMemo(
+    () => accounts.filter((a) => a.is_active !== false),
+    [accounts]
+  );
+
   // Filter accounts
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return accounts.filter((a) => {
+    return activeAccounts.filter((a) => {
       if (catFilter !== "all") {
         const target = catFilter === -1 ? null : catFilter;
         if (a.category_id !== target) return false;
@@ -218,7 +227,7 @@ export default function CategoryEditor({
         a.description.toLowerCase().includes(q)
       );
     });
-  }, [accounts, filter, catFilter]);
+  }, [activeAccounts, filter, catFilter]);
 
   async function saveCategory(acc: EditorAccount, newCatId: number | null) {
     setSavingId(acc.id);
@@ -268,7 +277,7 @@ export default function CategoryEditor({
           <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
         )}
         <h2 className="text-base font-semibold text-gray-900">
-          Account Categorization ({accounts.length} account{accounts.length === 1 ? "" : "s"})
+          Account Categorization ({activeAccounts.length} account{activeAccounts.length === 1 ? "" : "s"})
         </h2>
       </button>
 
@@ -294,7 +303,7 @@ export default function CategoryEditor({
               : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
           }`}
         >
-          All {accounts.length}
+          All {activeAccounts.length}
         </button>
         {categories
           .slice()
