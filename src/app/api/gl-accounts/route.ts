@@ -16,11 +16,20 @@ export async function GET() {
         c.color AS category_color,
         g.is_active,
         g.created_at,
-        COUNT(wb.id)::int AS balance_count
+        COUNT(DISTINCT wb.id)::int       AS balance_count,
+        COALESCE(tx.tx_count, 0)::int    AS tx_count,
+        COALESCE(tx.week_count, 0)::int  AS tx_week_count
       FROM gl_accounts g
       LEFT JOIN categories c ON c.id = g.category_id
       LEFT JOIN weekly_balances wb ON wb.gl_account_id = g.id
-      GROUP BY g.id, c.name, c.color
+      LEFT JOIN (
+        SELECT gl_account_id,
+               COUNT(*)::int                         AS tx_count,
+               COUNT(DISTINCT week_ending)::int      AS week_count
+        FROM weekly_transactions
+        GROUP BY gl_account_id
+      ) tx ON tx.gl_account_id = g.id
+      GROUP BY g.id, c.name, c.color, tx.tx_count, tx.week_count
       ORDER BY g.account_no ASC
     `;
     return NextResponse.json(accounts);

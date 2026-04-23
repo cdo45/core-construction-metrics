@@ -113,6 +113,7 @@ export async function GET(req: NextRequest) {
       JOIN  gl_accounts g ON g.id = wb.gl_account_id
       LEFT JOIN categories c ON c.id = g.category_id
       WHERE wb.week_ending = ${weekEnding}
+        AND g.is_active = true
       ORDER BY c.sort_order NULLS LAST, g.account_no
     `;
 
