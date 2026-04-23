@@ -9,6 +9,10 @@ import CashVsDebtChart from "@/components/dashboard/CashVsDebtChart";
 import DebtPaydownChart from "@/components/dashboard/DebtPaydownChart";
 import RevenueVsCostChart from "@/components/dashboard/RevenueVsCostChart";
 import PnlBreakdownTable from "@/components/dashboard/PnlBreakdownTable";
+import RunwayKPICards from "@/components/dashboard/RunwayKPICards";
+import GrowthTargetSlider from "@/components/dashboard/GrowthTargetSlider";
+import CashFlowTrendChart from "@/components/dashboard/CashFlowTrendChart";
+import WhatIfCalculator from "@/components/dashboard/WhatIfCalculator";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -68,6 +72,9 @@ function DashboardInner() {
   const [loading, setLoading] = useState(true);
   const [pnlLoading, setPnlLoading] = useState(false);
   const [error, setError] = useState("");
+  // Growth target for the "Grow Number" card. Not URL-persisted — the slider
+  // is an exploratory knob; FY/month carry the link-shareable state.
+  const [growthTarget, setGrowthTarget] = useState(0.10);
 
   // 1) Load calendar so we know which FYs + months exist and which are "active".
   useEffect(() => {
@@ -110,23 +117,27 @@ function DashboardInner() {
   const effectiveMonth = monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : null;
 
   // 3) Fetch metrics whenever the effective filter changes.
-  const fetchMetrics = useCallback(async (fy: number | null, month: string | null) => {
-    setLoading(true);
-    setError("");
-    try {
-      const qs = new URLSearchParams();
-      if (fy !== null) qs.set("fiscal_year", String(fy));
-      if (month !== null) qs.set("month", month);
-      const url = qs.toString() ? `/api/metrics?${qs.toString()}` : "/api/metrics";
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData((await res.json()) as MetricsResponse);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const fetchMetrics = useCallback(
+    async (fy: number | null, month: string | null, growthTargetPct: number) => {
+      setLoading(true);
+      setError("");
+      try {
+        const qs = new URLSearchParams();
+        if (fy !== null) qs.set("fiscal_year", String(fy));
+        if (month !== null) qs.set("month", month);
+        qs.set("growth_target_pct", growthTargetPct.toFixed(2));
+        const url = qs.toString() ? `/api/metrics?${qs.toString()}` : "/api/metrics";
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setData((await res.json()) as MetricsResponse);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
 
   // P&L breakdown uses the same FY (required) + optional month. Fire in
   // parallel with /api/metrics so the page settles in one render cycle.
@@ -154,9 +165,9 @@ function DashboardInner() {
 
   useEffect(() => {
     if (effectiveFy === null) return; // wait for weeksList
-    fetchMetrics(effectiveFy, effectiveMonth);
+    fetchMetrics(effectiveFy, effectiveMonth, growthTarget);
     fetchPnl(effectiveFy, effectiveMonth);
-  }, [effectiveFy, effectiveMonth, fetchMetrics, fetchPnl]);
+  }, [effectiveFy, effectiveMonth, growthTarget, fetchMetrics, fetchPnl]);
 
   // 4) Toggle handlers — update the URL; a router.replace keeps history clean.
   function updateUrl(nextFy: number | null, nextMonth: string | null) {
@@ -197,7 +208,7 @@ function DashboardInner() {
           </p>
         </div>
         <button
-          onClick={() => fetchMetrics(effectiveFy, effectiveMonth)}
+          onClick={() => fetchMetrics(effectiveFy, effectiveMonth, growthTarget)}
           disabled={loading}
           className="btn-secondary flex items-center gap-2 disabled:opacity-50"
         >
@@ -304,6 +315,12 @@ function DashboardInner() {
             <SectionHeader>═══ CASH FLOW ═══</SectionHeader>
             <CashVsDebtChart weeks={weeks} />
             <DebtPaydownChart weeks={weeks} />
+
+            <SectionHeader>═══ CASH RUNWAY &amp; GROWTH ═══</SectionHeader>
+            <RunwayKPICards runway={data?.runway ?? null} />
+            <GrowthTargetSlider value={growthTarget} onCommit={setGrowthTarget} />
+            <CashFlowTrendChart weeks={weeks} runway={data?.runway ?? null} />
+            <WhatIfCalculator runway={data?.runway ?? null} />
 
             <SectionHeader>═══ P&amp;L ═══</SectionHeader>
             <RevenueVsCostChart weeks={weeks} />
