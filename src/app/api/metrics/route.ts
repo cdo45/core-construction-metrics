@@ -27,6 +27,12 @@ const ACCT_PAYROLL_ACCRUALS_MAX = 2166;
 const ACCT_PAYROLL_RUN_DIRECT = 5101;         // Direct labor
 const ACCT_PAYROLL_RUN_FIELD  = 6080;         // Field payroll
 
+// Runway-section specific accounts. Cash collections land in operating bank
+// accounts 1021/1027/1120. Payroll cash-outs span the direct-labor bucket
+// plus related payroll-tax / burden accounts.
+const ACCTS_CASH_COLLECTED = [1021, 1027, 1120] as const;
+const ACCTS_PAYROLL_PAID   = [5101, 5210, 5220, 5250, 6080, 6100] as const;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface WeekMetric {
@@ -88,6 +94,37 @@ export interface WeekMetric {
   bids_submitted_value: number;
   bids_won_count: number;
   bids_won_value: number;
+
+  // Runway-section per-week cash flows. All ABS'd, positive = money moved.
+  //   weekly_cash_collected  = Σ period_debit to 1021,1027,1120
+  //   weekly_ap_paid         = Σ period_debit to 2005
+  //   weekly_payroll_paid    = Σ period_debit to 5101,5210,5220,5250,6080,6100
+  //   weekly_overhead_paid   = Σ period_debit to cat-7 accounts
+  //   weekly_revenue         = Σ period_credit to cat-8 accounts
+  weekly_cash_collected: number;
+  weekly_ap_paid: number;
+  weekly_payroll_paid: number;
+  weekly_overhead_paid: number;
+  weekly_revenue: number;
+}
+
+// ─── Runway summary ──────────────────────────────────────────────────────────
+
+export interface RunwaySummary {
+  // 8-week rolling averages over active weeks only.
+  avg_weekly_collections: number;
+  // avg_weekly_burn = 8-wk avg of (AP paid + OH paid) + THIS week's payroll.
+  // Payroll is a known weekly reality (not smoothed); AP/OH are bursty and
+  // benefit from the smoothing.
+  avg_weekly_burn: number;
+  avg_weekly_revenue: number;
+  collection_efficiency: number | null; // collections / revenue
+  weeks_of_runway: number | null;       // current_cash / avg_weekly_burn
+  coast_weekly: number;                 // burn (what to collect to stay flat)
+  grow_weekly: number;                  // coast + growth_target_pct * revenue
+  growth_target_pct: number;            // echo of input (0..1)
+  current_cash: number;                 // anchor week's cat_1_cash
+  anchor_week_ending: string | null;
 }
 
 export interface MonthMetric {
@@ -107,6 +144,7 @@ export interface MonthMetric {
 export interface MetricsResponse {
   weeks: WeekMetric[];
   months: MonthMetric[];
+  runway: RunwaySummary;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -136,8 +174,20 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const fyRaw = searchParams.get("fiscal_year");
     const monthRaw = searchParams.get("month");
+    const gtRaw = searchParams.get("growth_target_pct");
     const fyFilter = fyRaw && /^\d{4}$/.test(fyRaw) ? parseInt(fyRaw, 10) : null;
     const monthFilter = monthRaw && /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : null;
+    // growth_target_pct accepts a decimal (0.10) OR an int-as-pct (10) for
+    // convenience. Clamp to [0, 1]. Default 0.10.
+    let growthTargetPct = 0.10;
+    if (gtRaw !== null && gtRaw !== "") {
+      const parsed = parseFloat(gtRaw);
+      if (isFinite(parsed)) {
+        growthTargetPct = parsed > 1 ? parsed / 100 : parsed;
+        if (growthTargetPct < 0) growthTargetPct = 0;
+        if (growthTargetPct > 1) growthTargetPct = 1;
+      }
+    }
 
     // Single query: one row per (week, category) with sums.
     // Always JOIN fresh so changing gl_accounts.category_id retroactively
@@ -206,9 +256,21 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ── Specific-account rollup (AP, payroll accruals, direct+field payroll) ─
-    // Same FY/month filter as rawRollups. Aggregates across divisions — the
-    // same account_no can exist under multiple divisions.
+    // ── Specific-account rollup ─────────────────────────────────────────────
+    // Ratios + runway share this query so the DB only does the JOIN once.
+    // Accounts included:
+    //   2005                      A/P Trade              (ratios + runway)
+    //   2150-2166 (range)          Payroll accruals       (ratios)
+    //   5101, 6080                 Labor + field          (ratios + runway)
+    //   1021, 1027, 1120           Cash collection deposits (runway)
+    //   5210, 5220, 5250, 6100     Payroll-related debits  (runway)
+    const runwayAccountList = [
+      ACCT_AP,
+      ACCT_PAYROLL_RUN_DIRECT,
+      ACCT_PAYROLL_RUN_FIELD,
+      ...ACCTS_CASH_COLLECTED,
+      ...ACCTS_PAYROLL_PAID,
+    ];
     const acctRollups = await sql`
       SELECT
         wb.week_ending::text AS week_ending,
@@ -221,7 +283,7 @@ export async function GET(req: NextRequest) {
       JOIN weeks w         ON w.week_ending = wb.week_ending
       WHERE ga.is_active = true
         AND (
-          ga.account_no IN (${ACCT_AP}, ${ACCT_PAYROLL_RUN_DIRECT}, ${ACCT_PAYROLL_RUN_FIELD})
+          ga.account_no = ANY(${runwayAccountList}::int[])
           OR ga.account_no BETWEEN ${ACCT_PAYROLL_ACCRUALS_MIN} AND ${ACCT_PAYROLL_ACCRUALS_MAX}
         )
         AND (${fyFilter}::int  IS NULL OR w.fiscal_year = ${fyFilter}::int)
@@ -323,6 +385,22 @@ export async function GET(req: NextRequest) {
         (getAcct(ACCT_PAYROLL_RUN_FIELD)?.pd ?? 0)
       );
 
+      // Runway per-week cash flows (all ABS, positive = cash moved).
+      //   collected = deposits to ops banks (debit on debit-normal assets).
+      //   ap_paid   = debit to 2005 (bills paid out of cash).
+      //   payroll_paid = debits to the labor + payroll-tax accounts.
+      //   overhead_paid = cat-7 period_debit (expense posts; pd proxy).
+      //   revenue  = cat-8 period_credit (revenue earned this week).
+      let _cashCollected = 0;
+      for (const a of ACCTS_CASH_COLLECTED) _cashCollected += getAcct(a)?.pd ?? 0;
+      const weekly_cash_collected = Math.abs(_cashCollected);
+      const weekly_ap_paid = Math.abs(getAcct(ACCT_AP)?.pd ?? 0);
+      let _payrollPaid = 0;
+      for (const a of ACCTS_PAYROLL_PAID) _payrollPaid += getAcct(a)?.pd ?? 0;
+      const weekly_payroll_paid = Math.abs(_payrollPaid);
+      const weekly_overhead_paid = Math.abs(get(CAT.OVERHEAD)?.pd ?? 0);
+      const weekly_revenue       = Math.abs(get(CAT.REVENUE)?.pc ?? 0);
+
       // All-positive ratio inputs.
       const shortTermLiab = ap + payroll_accruals;
       const net_liquidity = cat_1_cash - ap - payroll_accruals;
@@ -373,6 +451,11 @@ export async function GET(req: NextRequest) {
         bids_submitted_value: bids?.submitted_value ?? 0,
         bids_won_count:       bids?.won_count       ?? 0,
         bids_won_value:       bids?.won_value       ?? 0,
+        weekly_cash_collected,
+        weekly_ap_paid,
+        weekly_payroll_paid,
+        weekly_overhead_paid,
+        weekly_revenue,
         // Hidden — stripped before JSON response.
         _ap_period_credit,
         _payroll_period_debit,
@@ -466,7 +549,51 @@ export async function GET(req: NextRequest) {
         win_rate_pct: v.sub_count > 0 ? (v.won_count / v.sub_count) * 100 : 0,
       }));
 
-    return NextResponse.json({ weeks, months } satisfies MetricsResponse);
+    // ── Runway summary ──────────────────────────────────────────────────────
+    // Anchor on the LAST active week (not the literal last row) so a future
+    // configured-but-unimported week can't nuke current_cash → runway.
+    const activeTail8 = lastActiveWeeks(weeks, 8);
+    const anchor = activeTail8.length > 0
+      ? activeTail8[activeTail8.length - 1]
+      : weeks[weeks.length - 1] ?? null;
+
+    const avgOver = (fn: (w: WeekMetric) => number) =>
+      activeTail8.length > 0
+        ? activeTail8.reduce((s, w) => s + fn(w), 0) / activeTail8.length
+        : 0;
+
+    const avg_weekly_collections = avgOver((w) => w.weekly_cash_collected);
+    const avg_weekly_ap_paid     = avgOver((w) => w.weekly_ap_paid);
+    const avg_weekly_overhead_paid = avgOver((w) => w.weekly_overhead_paid);
+    const avg_weekly_revenue     = avgOver((w) => w.weekly_revenue);
+
+    // Spec: payroll is NOT smoothed (weekly reality); AP+OH are smoothed.
+    const current_payroll_paid = anchor?.weekly_payroll_paid ?? 0;
+    const avg_weekly_burn =
+      avg_weekly_ap_paid + avg_weekly_overhead_paid + current_payroll_paid;
+
+    const current_cash = anchor?.cat_1_cash ?? 0;
+    const weeks_of_runway = avg_weekly_burn > 0 ? current_cash / avg_weekly_burn : null;
+    const collection_efficiency =
+      avg_weekly_revenue > 0 ? avg_weekly_collections / avg_weekly_revenue : null;
+
+    const coast_weekly = avg_weekly_burn;
+    const grow_weekly  = coast_weekly + growthTargetPct * avg_weekly_revenue;
+
+    const runway: RunwaySummary = {
+      avg_weekly_collections,
+      avg_weekly_burn,
+      avg_weekly_revenue,
+      collection_efficiency,
+      weeks_of_runway,
+      coast_weekly,
+      grow_weekly,
+      growth_target_pct: growthTargetPct,
+      current_cash,
+      anchor_week_ending: anchor?.week_ending ?? null,
+    };
+
+    return NextResponse.json({ weeks, months, runway } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
