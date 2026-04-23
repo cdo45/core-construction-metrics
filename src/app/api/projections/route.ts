@@ -246,24 +246,25 @@ export async function GET() {
   try {
     const sql = getDb();
 
-    // ── 1. Weekly category totals ─────────────────────────────────────────────
+    // ── 1. Weekly category totals — keyed by category_id, not name ────────────
+    //    Category IDs: 1=Cash, 2=AR, 3=Current Debt, 5=Payroll Liab
     const rawWeeks = await sql`
       WITH cat_totals AS (
         SELECT
           wb.week_ending,
-          c.name AS cat,
+          ga.category_id,
           SUM(wb.end_balance) AS total
         FROM weekly_balances wb
-        JOIN  gl_accounts g ON g.id = wb.gl_account_id
-        LEFT JOIN categories c ON c.id = g.category_id
-        GROUP BY wb.week_ending, c.name
+        JOIN gl_accounts ga ON ga.id = wb.gl_account_id
+        WHERE ga.category_id IS NOT NULL
+        GROUP BY wb.week_ending, ga.category_id
       )
       SELECT
         w.week_ending::text,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Cash on Hand'        THEN ct.total END), 0) AS cash,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Who Owes Us'         THEN ct.total END), 0) AS ar,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Who We Owe'          THEN ct.total END), 0) AS ap,
-        COALESCE(MAX(CASE WHEN ct.cat = 'Payroll Liabilities' THEN ct.total END), 0) AS payroll
+        COALESCE(MAX(CASE WHEN ct.category_id = 1 THEN ct.total END), 0) AS cash,
+        COALESCE(MAX(CASE WHEN ct.category_id = 2 THEN ct.total END), 0) AS ar,
+        COALESCE(MAX(CASE WHEN ct.category_id = 3 THEN ct.total END), 0) AS ap,
+        COALESCE(MAX(CASE WHEN ct.category_id = 5 THEN ct.total END), 0) AS payroll
       FROM (SELECT DISTINCT week_ending FROM weekly_balances) w
       LEFT JOIN cat_totals ct ON ct.week_ending = w.week_ending
       GROUP BY w.week_ending
