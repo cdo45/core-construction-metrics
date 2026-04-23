@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { ChevronRight, ChevronDown } from "lucide-react";
+
+const LS_KEY = "setup_excluded_collapsed";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -324,6 +327,29 @@ export default function ExcludedAccountsTable({ onActivated }: Props) {
   const [loading, setLoading] = useState(true);
   const [modalTarget, setModalTarget] = useState<ExcludedAccount | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err"; n: number } | null>(null);
+  // Default collapsed. Resolved from localStorage after mount to avoid hydration mismatch.
+  const [collapsed, setCollapsed] = useState(true);
+
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(LS_KEY) : null;
+      if (raw !== null) setCollapsed(raw === "true");
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(LS_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
 
   const fetchData = useCallback(async () => {
     try {
@@ -367,11 +393,29 @@ export default function ExcludedAccountsTable({ onActivated }: Props) {
         />
       )}
       <div className="card">
-        <div className="px-6 py-4 border-b border-gray-200">
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          className="w-full flex items-center gap-2 px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+        >
+          {collapsed ? (
+            <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+          )}
           <h2 className="text-base font-semibold text-gray-900">
-            Excluded Accounts ({rows.length} row{rows.length === 1 ? "" : "s"})
+            Excluded Accounts ({rows.length})
           </h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+        </button>
+
+        <div
+          className={`overflow-hidden transition-all duration-200 ${
+            collapsed ? "max-h-0 opacity-0" : "max-h-[20000px] opacity-100"
+          }`}
+        >
+        <div className="px-6 pb-3 pt-1 border-t border-gray-200">
+          <p className="text-xs text-gray-500">
             Accounts that have appeared in imports but aren&apos;t tracked. Activate to start
             including them on dashboards. Activation backfills all historical weeks.
           </p>
@@ -427,6 +471,7 @@ export default function ExcludedAccountsTable({ onActivated }: Props) {
               </tbody>
             </table>
           )}
+        </div>
         </div>
       </div>
 

@@ -812,22 +812,16 @@ export default function SetupPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
-          <section>
-            <h2 className="text-base font-semibold text-gray-900 mb-4">Excluded Accounts</h2>
-            <ExcludedAccountsTable onActivated={fetchData} />
-          </section>
-          <section>
-            <h2 className="text-base font-semibold text-gray-900 mb-4">Account Categorization</h2>
-            <CategoryEditor
-              accounts={accounts}
-              categories={categories}
-              onAccountUpdated={(u) =>
-                setAccounts((prev) =>
-                  prev.map((a) => (a.id === u.id ? { ...a, category_id: u.category_id } : a))
-                )
-              }
-            />
-          </section>
+          <ExcludedAccountsTable onActivated={fetchData} />
+          <CategoryEditor
+            accounts={accounts}
+            categories={categories}
+            onAccountUpdated={(u) =>
+              setAccounts((prev) =>
+                prev.map((a) => (a.id === u.id ? { ...a, category_id: u.category_id } : a))
+              )
+            }
+          />
           <CategoriesSection categories={categories} onRefresh={fetchData} />
           <GlAccountsSection
             accounts={accounts}

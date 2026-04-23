@@ -1,6 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, ChevronDown } from "lucide-react";
+
+const LS_KEY = "setup_category_editor_collapsed";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,6 +71,29 @@ export default function CategoryEditor({
   const [catFilter, setCatFilter] = useState<number | "all">("all");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err"; n: number } | null>(null);
+  // Default collapsed. Hydrated from localStorage after mount.
+  const [collapsed, setCollapsed] = useState(true);
+
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(LS_KEY) : null;
+      if (raw !== null) setCollapsed(raw === "true");
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(LS_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
 
   // Category pills counts
   const countByCat = useMemo(() => {
@@ -119,7 +145,29 @@ export default function CategoryEditor({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="card">
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-expanded={!collapsed}
+        className="w-full flex items-center gap-2 px-6 py-4 text-left hover:bg-gray-50 transition-colors"
+      >
+        {collapsed ? (
+          <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+        )}
+        <h2 className="text-base font-semibold text-gray-900">
+          Account Categorization ({accounts.length} account{accounts.length === 1 ? "" : "s"})
+        </h2>
+      </button>
+
+      <div
+        className={`overflow-hidden transition-all duration-200 ${
+          collapsed ? "max-h-0 opacity-0" : "max-h-[20000px] opacity-100"
+        }`}
+      >
+      <div className="px-6 pb-4 pt-3 border-t border-gray-200 flex flex-col gap-4">
       <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
         <strong>Heads up:</strong> Changing an account&apos;s category retroactively reclassifies
         all historical data on dashboards and reports. This does not touch the underlying GL or
@@ -242,6 +290,8 @@ export default function CategoryEditor({
             )}
           </tbody>
         </table>
+      </div>
+      </div>
       </div>
 
       {toast && (
