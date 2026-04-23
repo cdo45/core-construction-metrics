@@ -457,9 +457,192 @@ function EquipmentTab({ baseline }: { baseline: Baseline }) {
   );
 }
 
-// ─── Placeholder tab ─────────────────────────────────────────────────────────
-// Stubs the Job and Debt tabs while their final implementations land in the
-// follow-up commits. Keeps the file compiling and the tab switcher wired.
+// ─── Job tab ─────────────────────────────────────────────────────────────────
+
+// Margin floors — drive the verdict bands and the gauge tick marks.
+const JOB_MARGIN_FLOORS = { thin: 0.10, residential: 0.15, strong: 0.20 };
+
+function MarginGauge({ margin }: { margin: number | null }) {
+  // 30% is the right edge of the gauge — typical construction ceiling.
+  const max = 0.30;
+  const clamped = Math.max(0, Math.min(max, margin ?? 0));
+  const pct = (clamped / max) * 100;
+  const bar = margin === null
+    ? "#d1d5db"
+    : margin >= JOB_MARGIN_FLOORS.strong      ? "#2F9E44"
+    : margin >= JOB_MARGIN_FLOORS.residential ? "#B7791F"
+    : margin >= JOB_MARGIN_FLOORS.thin        ? "#EA580C"
+    : "#C00000";
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
+        <span>0%</span>
+        <span>10%</span>
+        <span>15%</span>
+        <span>20%</span>
+        <span>30%</span>
+      </div>
+      <div className="relative h-3 bg-gray-100 rounded-full overflow-hidden">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full transition-all"
+          style={{ width: `${pct}%`, backgroundColor: bar }}
+        />
+        {/* Threshold ticks at 10/15/20%. */}
+        {[JOB_MARGIN_FLOORS.thin, JOB_MARGIN_FLOORS.residential, JOB_MARGIN_FLOORS.strong].map((t) => (
+          <div
+            key={t}
+            className="absolute inset-y-0 w-px bg-gray-400"
+            style={{ left: `${(t / max) * 100}%` }}
+          />
+        ))}
+      </div>
+      <div className="text-xs text-gray-700 mt-1 font-semibold tabular-nums">
+        Gross margin: {fmtPct((margin ?? 0) * 100)}
+      </div>
+    </div>
+  );
+}
+
+function JobTab({ baseline }: { baseline: Baseline }) {
+  const [contract, setContract] = useState("");
+  const [duration, setDuration] = useState("");
+  const [totalCost, setTotalCost] = useState("");
+
+  const dContract = useDebounced(contract);
+  const dDuration = useDebounced(duration);
+  const dTotalCost = useDebounced(totalCost);
+
+  const math = useMemo(() => {
+    const c = parseFloat(dContract) || 0;
+    const w = parseInt(dDuration, 10) || 0;
+    const tc = parseFloat(dTotalCost) || 0;
+    const weeklyRevenueAdded = w > 0 ? c / w : 0;
+    const weeklyCostAdded    = w > 0 ? tc / w : 0;
+    const weeklyMargin       = weeklyRevenueAdded - weeklyCostAdded;
+    const totalGrossProfit   = c - tc;
+    const grossMarginPct     = c > 0 ? (c - tc) / c : null;
+    return { c, w, tc, weeklyRevenueAdded, weeklyCostAdded, weeklyMargin, totalGrossProfit, grossMarginPct };
+  }, [dContract, dDuration, dTotalCost]);
+
+  const scenario: Scenario = useMemo(() => ({
+    new_collections: baseline.collections + math.weeklyRevenueAdded,
+    new_burn:        baseline.burn        + math.weeklyCostAdded,
+    cash_step:       0,
+    revert_after_weeks: math.w,
+  }), [baseline, math]);
+
+  const newCollections = baseline.collections + math.weeklyRevenueAdded;
+  const newBurn        = baseline.burn + math.weeklyCostAdded;
+  const newNetWeekly   = newCollections - newBurn;
+  const cashAtCompletion = baseline.cash + newNetWeekly * math.w;
+  const newCoast = newBurn;
+  const newGrow  = newCoast + baseline.growth_target_pct * (baseline.avg_weekly_revenue + math.weeklyRevenueAdded);
+
+  let verdict: { kind: VerdictKind; text: string } | null = null;
+  if (math.grossMarginPct !== null) {
+    const m = math.grossMarginPct;
+    if (m >= JOB_MARGIN_FLOORS.strong) {
+      verdict = { kind: "good",    text: "Strong margin — take it." };
+    } else if (m >= JOB_MARGIN_FLOORS.residential) {
+      verdict = { kind: "warn",    text: "Acceptable — typical residential floor." };
+    } else if (m >= JOB_MARGIN_FLOORS.thin) {
+      verdict = { kind: "caution", text: "Thin — commercial floor only." };
+    } else {
+      verdict = { kind: "bad",     text: "Below floor — walk away." };
+    }
+  }
+
+  const hasInputs = math.c > 0 && math.w > 0 && math.tc > 0;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <MoneyInput
+          label="Contract value"
+          value={contract}
+          onChange={setContract}
+          help="Total invoice-able value of the contract over the full duration."
+        />
+        <NumberInput
+          label="Duration"
+          value={duration}
+          onChange={setDuration}
+          suffix="wks"
+          help="How many weeks of work the job covers. Revenue and cost are spread evenly across these weeks."
+        />
+        <MoneyInput
+          label="Total estimated cost"
+          value={totalCost}
+          onChange={setTotalCost}
+          help="All-in direct cost: labor + materials + subs + equipment. Not including overhead (overhead is already in your baseline burn)."
+        />
+      </div>
+
+      {!hasInputs ? (
+        <p className="text-xs text-gray-400 italic">Enter values to see impact.</p>
+      ) : (
+        <>
+          <div className="bg-gray-50 rounded-md p-3">
+            <OutputRow
+              label="Weekly revenue added"
+              value={`+${fmtMoneyShort(math.weeklyRevenueAdded)}/wk`}
+              valueColor="text-green-700"
+              help="Contract value ÷ duration."
+            />
+            <OutputRow
+              label="Weekly cost added"
+              value={`-${fmtMoneyShort(math.weeklyCostAdded)}/wk`}
+              valueColor="text-red-700"
+              help="Total estimated cost ÷ duration."
+            />
+            <OutputRow
+              label="Weekly margin"
+              value={`${math.weeklyMargin >= 0 ? "+" : "-"}${fmtMoneyShort(Math.abs(math.weeklyMargin))}/wk`}
+              valueColor={math.weeklyMargin >= 0 ? "text-green-700" : "text-red-700"}
+              emphasize
+              help="Weekly revenue added minus weekly cost added."
+            />
+            <OutputRow
+              label="Total gross profit"
+              value={fmtMoneyFull(math.totalGrossProfit)}
+              valueColor={math.totalGrossProfit >= 0 ? "text-green-700" : "text-red-700"}
+              help="Contract value minus total estimated cost, over the full duration."
+            />
+
+            <MarginGauge margin={math.grossMarginPct} />
+
+            <div className="border-t border-gray-300 my-3" />
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Scenario impact (during job)</div>
+            <OutputRow label="New weekly collections" value={`${fmtMoneyShort(newCollections)}/wk`} />
+            <OutputRow label="New weekly burn"        value={`${fmtMoneyShort(newBurn)}/wk`} />
+            <OutputRow
+              label="New net weekly cash flow"
+              value={`${newNetWeekly >= 0 ? "+" : "-"}${fmtMoneyShort(Math.abs(newNetWeekly))}/wk`}
+              valueColor={newNetWeekly >= 0 ? "text-green-700" : "text-red-700"}
+              emphasize
+            />
+            <OutputRow
+              label="Projected cash at completion"
+              value={fmtMoneyFull(cashAtCompletion)}
+              emphasize
+              help="Current cash + (net weekly cash flow during job × duration). Assumes billings collect in pace with work; real-world collections lag."
+            />
+            <OutputRow label="New coast number (during job)" value={`${fmtMoneyShort(newCoast)}/wk`} />
+            <OutputRow label="New grow number (during job)"  value={`${fmtMoneyShort(newGrow)}/wk`} />
+            {verdict && <VerdictBadge kind={verdict.kind} text={verdict.text} />}
+          </div>
+
+          <WhatIfComparisonChart
+            metrics={compareMetrics(baseline, scenario)}
+            cashProjection={projectCash(baseline, scenario)}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Placeholder tab (Debt — lands in next commit) ───────────────────────────
 
 function StubTab({ label }: { label: string }) {
   return (
@@ -527,7 +710,7 @@ export default function WhatIfCalculator({ runway }: { runway: RunwaySummary | n
         ) : tab === "equipment" ? (
           <EquipmentTab baseline={baseline} />
         ) : tab === "job" ? (
-          <StubTab label="Job tab" />
+          <JobTab baseline={baseline} />
         ) : (
           <StubTab label="Debt Paydown tab" />
         )}
