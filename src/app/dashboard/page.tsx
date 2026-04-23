@@ -3,8 +3,12 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { MetricsResponse } from "@/app/api/metrics/route";
+import type { PnlBreakdownResponse } from "@/app/api/pnl-breakdown/route";
 import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards";
-import TrendCharts from "@/components/dashboard/TrendCharts";
+import CashVsDebtChart from "@/components/dashboard/CashVsDebtChart";
+import DebtPaydownChart from "@/components/dashboard/DebtPaydownChart";
+import RevenueVsCostChart from "@/components/dashboard/RevenueVsCostChart";
+import PnlBreakdownTable from "@/components/dashboard/PnlBreakdownTable";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -60,7 +64,9 @@ function DashboardInner() {
 
   const [weeksList, setWeeksList] = useState<WeeksListRow[] | null>(null);
   const [data, setData] = useState<MetricsResponse | null>(null);
+  const [pnlData, setPnlData] = useState<PnlBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pnlLoading, setPnlLoading] = useState(false);
   const [error, setError] = useState("");
 
   // 1) Load calendar so we know which FYs + months exist and which are "active".
@@ -122,10 +128,35 @@ function DashboardInner() {
     }
   }, []);
 
+  // P&L breakdown uses the same FY (required) + optional month. Fire in
+  // parallel with /api/metrics so the page settles in one render cycle.
+  const fetchPnl = useCallback(async (fy: number | null, month: string | null) => {
+    if (fy === null) {
+      setPnlData(null);
+      return;
+    }
+    setPnlLoading(true);
+    try {
+      const qs = new URLSearchParams({ fiscal_year: String(fy) });
+      if (month !== null) qs.set("month", month);
+      const res = await fetch(`/api/pnl-breakdown?${qs.toString()}`);
+      if (!res.ok) {
+        setPnlData(null);
+        return;
+      }
+      setPnlData((await res.json()) as PnlBreakdownResponse);
+    } catch {
+      setPnlData(null);
+    } finally {
+      setPnlLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (effectiveFy === null) return; // wait for weeksList
     fetchMetrics(effectiveFy, effectiveMonth);
-  }, [effectiveFy, effectiveMonth, fetchMetrics]);
+    fetchPnl(effectiveFy, effectiveMonth);
+  }, [effectiveFy, effectiveMonth, fetchMetrics, fetchPnl]);
 
   // 4) Toggle handlers — update the URL; a router.replace keeps history clean.
   function updateUrl(nextFy: number | null, nextMonth: string | null) {
@@ -267,8 +298,27 @@ function DashboardInner() {
 
       <div className="flex flex-col gap-8">
         {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
-        {!loading && weeks.length > 0 && <TrendCharts weeks={weeks} />}
+
+        {!loading && weeks.length > 0 && (
+          <>
+            <SectionHeader>═══ CASH FLOW ═══</SectionHeader>
+            <CashVsDebtChart weeks={weeks} />
+            <DebtPaydownChart weeks={weeks} />
+
+            <SectionHeader>═══ P&amp;L ═══</SectionHeader>
+            <RevenueVsCostChart weeks={weeks} />
+            <PnlBreakdownTable data={pnlData} loading={pnlLoading} />
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-widest text-center mt-2">
+      {children}
+    </h2>
   );
 }
