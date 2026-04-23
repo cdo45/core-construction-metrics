@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { MetricsResponse } from "@/app/api/metrics/route";
 import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards";
 import TrendCharts from "@/components/dashboard/TrendCharts";
+import { lastActiveWeeks } from "@/lib/active-weeks";
 
 export default function DashboardPage() {
   const [data, setData] = useState<MetricsResponse | null>(null);
@@ -28,7 +29,10 @@ export default function DashboardPage() {
   }, []);
 
   const weeks = data?.weeks ?? [];
-  const latest = weeks[weeks.length - 1];
+  // "Latest" in the header = last week WITH imported activity. Falls back to
+  // the literal last row if no week has activity yet (initial setup).
+  const [latestActive] = lastActiveWeeks(weeks, 1);
+  const latest = latestActive ?? weeks[weeks.length - 1];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

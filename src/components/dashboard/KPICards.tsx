@@ -1,6 +1,7 @@
 "use client";
 
 import type { WeekMetric } from "@/app/api/metrics/route";
+import { lastActiveWeeks } from "@/lib/active-weeks";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -144,13 +145,11 @@ const COLORS = {
 export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
   if (weeks.length === 0) return <KPISkeleton />;
 
-  const latest = weeks[weeks.length - 1];
-
-  // Rolling 4-week revenue (sum). Margins on the rolling window would be
-  // more stable than the last single week, but the per-week metric is also
-  // exposed so we can label clearly.
-  const trail4 = weeks.slice(-4);
-  const revenue4wk = trail4.reduce((s, w) => s + w.cat_8_revenue, 0);
+  // Anchor on the last week WITH ACTIVITY — zero-activity future weeks are
+  // configured but unimported and would otherwise blank out every metric.
+  const activeTail = lastActiveWeeks(weeks, 4);
+  const latest = activeTail[activeTail.length - 1] ?? weeks[weeks.length - 1];
+  const revenue4wk = activeTail.reduce((s, w) => s + w.cat_8_revenue, 0);
 
   return (
     <div className="flex flex-col gap-6">

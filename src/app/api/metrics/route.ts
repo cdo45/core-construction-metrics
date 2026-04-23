@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { isActiveWeek, lastActiveWeeks } from "@/lib/active-weeks";
 
 // ─── Category IDs (must match DB categories table) ───────────────────────────
 // Using category_id throughout this route to avoid name-based fragility.
@@ -249,10 +250,15 @@ export async function GET() {
         w.net_liquidity_change = w.net_liquidity      - prev.net_liquidity;
       }
 
-      // Rolling 4-week averages for this-and-prior-3 weeks.
-      const window = weeksBase.slice(Math.max(0, i - 3), i + 1);
-      const avg = (fn: (w: typeof window[number]) => number) =>
-        window.length > 0 ? window.reduce((s, v) => s + fn(v), 0) / window.length : 0;
+      // Rolling 4-week averages: last 4 weeks WITH ACTIVITY up through this
+      // week. Empty (no-import) weeks don't dilute the average. If the current
+      // week is itself inactive it's naturally excluded, so the runway/burn
+      // stay anchored to the latest real activity.
+      const windowWeeks = lastActiveWeeks(weeksBase.slice(0, i + 1), 4);
+      const avg = (fn: (w: typeof windowWeeks[number]) => number) =>
+        windowWeeks.length > 0
+          ? windowWeeks.reduce((s, v) => s + fn(v), 0) / windowWeeks.length
+          : 0;
       const avgPayrollField = avg((x) => x.cat_6_payroll_field);
       const avgOverhead     = avg((x) => x.cat_7_overhead);
       w.payroll_runway_wks = avgPayrollField > 0 ? w.cat_1_cash / avgPayrollField : null;
@@ -268,6 +274,9 @@ export async function GET() {
       sub_count: number; sub_value: number; won_count: number; won_value: number;
     }>();
     for (const w of weeks) {
+      // Skip zero-activity weeks so a configured-but-unimported week can't
+      // drag a monthly cash/AR/etc. average toward zero.
+      if (!isActiveWeek(w)) continue;
       const m = w.week_ending.slice(0, 7);
       if (!monthMap.has(m)) {
         monthMap.set(m, {
