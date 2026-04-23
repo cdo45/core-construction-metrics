@@ -103,7 +103,7 @@ export default function RunwayKPICards({ runway }: { runway: RunwaySummary | nul
         value={fmtMoneyShort(runway.avg_weekly_burn)}
         subtitle="8-wk avg"
         accent={COLORS.burn}
-        help="Cash leaving per week. Weekly payroll (current week) + 8-wk avg of AP payments + 8-wk avg of overhead bills. Payroll is weekly reality; AP/OH are smoothed because they're bursty."
+        help="How fast cash is leaving per week. Adds current week's payroll + 8-week average of AP payments (bills paid to vendors) + 8-week average of overhead payments (rent, utilities, etc.). Payroll runs on a set weekly schedule so we use the actual number; AP and overhead land in lumps so we smooth them. Example: $450K/wk burn means cash drops about $450K every week with no collections."
       />
       <RunwayCard
         label="Net Cash Flow"
@@ -118,21 +118,21 @@ export default function RunwayKPICards({ runway }: { runway: RunwaySummary | nul
         value={fmtWeeks(runway.weeks_of_runway)}
         subtitle={`At current burn • anchor ${runway.anchor_week_ending ?? "—"}`}
         accent={COLORS.runway}
-        help="At current burn rate, how long before cash runs out assuming zero collections. Formula: current cash / weekly burn. Reality: you'll collect more, so this is worst-case."
+        help="Worst case: if collections stopped tomorrow, how many weeks of cash until you're out. Current cash ÷ weekly burn. Example: $2M cash ÷ $500K/wk burn = 4 weeks. Reality is better because you'll keep collecting — this is the floor."
       />
       <RunwayCard
         label="Coast Number"
         value={`${fmtMoneyShort(runway.coast_weekly)}/wk`}
         subtitle="Collections needed to break even"
         accent={COLORS.coast}
-        help="Collections needed per week to break even. Equal to weekly burn. Below this = draining cash."
+        help="The weekly collection target to stay cash-flat. Equal to weekly burn. If you collect this much each week, cash stays where it is. Less → cash shrinks; more → cash grows. Example: $450K/wk burn means you need to collect $450K/wk to coast."
       />
       <RunwayCard
         label="Grow Number"
         value={`${fmtMoneyShort(runway.grow_weekly)}/wk`}
         subtitle={`At ${growthPctLabel} growth target`}
         accent={COLORS.grow}
-        help={`Collections needed per week to grow revenue by ${growthPctLabel} YoY. Formula: coast + (${growthPctLabel} × avg weekly revenue). Adjust target with the slider.`}
+        help={`Weekly collection target to fund a ${growthPctLabel} revenue bump. Takes the coast number (break-even) and adds ${growthPctLabel} of average weekly revenue on top. Example at 10%: if weekly burn is $450K and weekly revenue averages $600K, grow number = $450K + ($60K) = $510K/wk. Adjust the target with the slider.`}
       />
     </div>
   );

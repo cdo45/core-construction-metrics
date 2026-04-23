@@ -2,6 +2,7 @@
 
 import type { WeekMetric, RunwaySummary } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
+import InfoTooltip from "@/components/ui/InfoTooltip";
 import {
   ComposedChart,
   Bar,
@@ -141,11 +142,17 @@ export default function CashFlowTrendChart({
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-2">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-900">Cash Flow Trend — Last 8 Weeks</h3>
-        <p className="text-xs text-gray-500">
-          Green = collections. Red stack = burn. Blue line = cash end balance. Dashed = break-even ({fmtMoneyShort(coast)}/wk).
-        </p>
+      <div className="flex items-start gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Cash Flow Trend — Last 8 Weeks</h3>
+          <p className="text-xs text-gray-500">
+            Green = collections. Red stack = burn. Blue line = cash end balance. Dashed = break-even ({fmtMoneyShort(coast)}/wk).
+          </p>
+        </div>
+        <InfoTooltip
+          align="left"
+          text="Shows what came in (green) vs what went out (red), week by week. Blue line is your actual cash balance at each week's end. When green bars exceed the dashed line, cash is growing. When red stack towers over green, cash is draining. Example: a week with $500K collected and $400K burned = $100K added to cash."
+        />
       </div>
       <div style={{ width: "100%", height: 340 }}>
         {data.length === 0 ? (
