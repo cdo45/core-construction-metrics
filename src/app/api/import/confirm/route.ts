@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { computeWeekEnding, buildDedupeHash } from "@/lib/week-math";
+import { computeWeekEnding, computeWeekMetadata, buildDedupeHash } from "@/lib/week-math";
 import type { NormalizedRow } from "@/lib/csv-reader";
 
 export const runtime = "nodejs";
@@ -252,6 +252,49 @@ export async function POST(req: NextRequest) {
         ON CONFLICT (dedupe_hash) DO NOTHING
       `;
       console.log('[confirm] step 4.5 DONE');
+    }
+
+    // ── Auto-create weeks rows for every date_booked in the batch ────────────
+    // weekly_transactions.week_ending has an FK to weeks(week_ending). If a
+    // CSV lands in a week we haven't pre-seeded (e.g. year-end partial weeks
+    // like 2025-12-31), the INSERT below would fail. Materialize the week
+    // rows with the canonical metadata first; ON CONFLICT (week_ending) DO
+    // NOTHING keeps this idempotent.
+    const weekMetaMap = new Map<string, { week_start: string; fiscal_year: number; is_partial_week: boolean }>();
+    for (const row of rows) {
+      const meta = computeWeekMetadata(row.dateBooked);
+      if (!weekMetaMap.has(meta.week_ending)) {
+        weekMetaMap.set(meta.week_ending, {
+          week_start: meta.week_start,
+          fiscal_year: meta.fiscal_year,
+          is_partial_week: meta.is_partial_week,
+        });
+      }
+    }
+
+    if (weekMetaMap.size > 0) {
+      const wkStartArr: string[] = [];
+      const wkEndArr: string[] = [];
+      const wkFyArr: number[] = [];
+      const wkPartialArr: boolean[] = [];
+      for (const [weekEnd, meta] of weekMetaMap) {
+        wkStartArr.push(meta.week_start);
+        wkEndArr.push(weekEnd);
+        wkFyArr.push(meta.fiscal_year);
+        wkPartialArr.push(meta.is_partial_week);
+      }
+      console.log('[confirm] step 4.75 START: upsert weeks, count=', weekMetaMap.size);
+      await sql`
+        INSERT INTO weeks (week_start, week_ending, fiscal_year, is_partial_week)
+        SELECT * FROM UNNEST(
+          ${wkStartArr}::date[],
+          ${wkEndArr}::date[],
+          ${wkFyArr}::int[],
+          ${wkPartialArr}::boolean[]
+        )
+        ON CONFLICT (week_ending) DO NOTHING
+      `;
+      console.log('[confirm] step 4.75 DONE');
     }
 
     if (txWeekEndings.length > 0) {
