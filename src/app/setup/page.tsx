@@ -17,6 +17,7 @@ interface Category {
 interface GlAccount {
   id: number;
   account_no: number;
+  division?: string | null;
   description: string;
   normal_balance: "debit" | "credit";
   category_id: number | null;
@@ -24,6 +25,8 @@ interface GlAccount {
   category_color: string | null;
   is_active: boolean;
   balance_count: number;
+  tx_count: number;
+  tx_week_count: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -767,6 +770,9 @@ export default function SetupPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<GlAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  // Bumped whenever a tracked account gets excluded, so ExcludedAccountsTable
+  // refetches and the account reappears there.
+  const [excludedRefresh, setExcludedRefresh] = useState(0);
 
   const fetchData = useCallback(async () => {
     try {
@@ -782,6 +788,11 @@ export default function SetupPage() {
       setLoading(false);
     }
   }, []);
+
+  const handleAccountExcluded = useCallback(() => {
+    fetchData();
+    setExcludedRefresh((n) => n + 1);
+  }, [fetchData]);
 
   useEffect(() => {
     fetchData();
@@ -812,7 +823,7 @@ export default function SetupPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
-          <ExcludedAccountsTable onActivated={fetchData} />
+          <ExcludedAccountsTable onActivated={fetchData} refreshKey={excludedRefresh} />
           <CategoryEditor
             accounts={accounts}
             categories={categories}
@@ -821,6 +832,7 @@ export default function SetupPage() {
                 prev.map((a) => (a.id === u.id ? { ...a, category_id: u.category_id } : a))
               )
             }
+            onAccountExcluded={handleAccountExcluded}
           />
           <CategoriesSection categories={categories} onRefresh={fetchData} />
           <GlAccountsSection

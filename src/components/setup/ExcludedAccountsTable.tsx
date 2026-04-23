@@ -29,6 +29,9 @@ interface Category {
 
 interface Props {
   onActivated?: () => void;
+  /** Bump to force a re-fetch from outside (e.g. after excluding an account
+   *  elsewhere on the page). Treat as opaque; value changes trigger refresh. */
+  refreshKey?: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -321,7 +324,7 @@ function ActivateModal({
 
 // ─── Main Table ───────────────────────────────────────────────────────────────
 
-export default function ExcludedAccountsTable({ onActivated }: Props) {
+export default function ExcludedAccountsTable({ onActivated, refreshKey }: Props) {
   const [rows, setRows] = useState<ExcludedAccount[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -366,7 +369,7 @@ export default function ExcludedAccountsTable({ onActivated }: Props) {
 
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+  }, [fetchData, refreshKey]);
 
   function handleActivated(msg: string) {
     setToast({ msg, kind: "ok", n: Date.now() });

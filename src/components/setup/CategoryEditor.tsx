@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ChevronDown } from "lucide-react";
+import { ChevronRight, ChevronDown, X } from "lucide-react";
 
 const LS_KEY = "setup_category_editor_collapsed";
 
@@ -22,12 +22,15 @@ export interface EditorAccount {
   normal_balance: "debit" | "credit";
   category_id: number | null;
   is_active: boolean;
+  tx_count?: number;
+  tx_week_count?: number;
 }
 
 interface Props {
   accounts: EditorAccount[];
   categories: EditorCategory[];
   onAccountUpdated: (updated: EditorAccount) => void;
+  onAccountExcluded?: () => void;
 }
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
@@ -60,17 +63,112 @@ function Toast({
   );
 }
 
+// ─── Exclude Modal ───────────────────────────────────────────────────────────
+
+function ExcludeModal({
+  acct,
+  onClose,
+  onExcluded,
+}: {
+  acct: EditorAccount;
+  onClose: () => void;
+  onExcluded: (msg: string) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const txCount = acct.tx_count ?? 0;
+  const weekCount = acct.tx_week_count ?? 0;
+
+  async function handleSubmit() {
+    setSaving(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/gl-accounts/${acct.id}/exclude`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.error ?? `HTTP ${res.status}`);
+        setSaving(false);
+        return;
+      }
+      onExcluded(
+        `Account excluded. ${data.transactions_moved} transactions moved to excluded list across ${data.weeks_affected} weeks.`
+      );
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  }
+
+  const title = `Exclude ${acct.account_no}${acct.division ? " / " + acct.division : ""}${
+    acct.description ? " — " + acct.description : ""
+  }?`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+              <path
+                fillRule="evenodd"
+                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </button>
+        </div>
+        <div className="px-6 py-5 flex flex-col gap-4">
+          <p className="text-sm text-gray-700">
+            This will move all transactions for this account back to the Excluded list. The
+            dashboard will no longer include this account&apos;s activity.
+          </p>
+          <div className="bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-xs text-gray-700">
+            <span className="font-semibold text-gray-900">{txCount}</span>{" "}
+            transaction{txCount === 1 ? "" : "s"} across{" "}
+            <span className="font-semibold text-gray-900">{weekCount}</span>{" "}
+            week{weekCount === 1 ? "" : "s"} will be affected.
+          </div>
+          <div className="bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-xs text-amber-800">
+            If another table (outside weekly_transactions / weekly_balances / excluded_transactions)
+            still references this account, the request will return a 409 with the blocking tables.
+          </div>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button onClick={onClose} className="btn-secondary" disabled={saving}>
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={saving}
+              className="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {saving ? "Excluding…" : "Exclude Account"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 export default function CategoryEditor({
   accounts,
   categories,
   onAccountUpdated,
+  onAccountExcluded,
 }: Props) {
   const [filter, setFilter] = useState("");
   const [catFilter, setCatFilter] = useState<number | "all">("all");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ msg: string; kind: "ok" | "err"; n: number } | null>(null);
+  const [excludeTarget, setExcludeTarget] = useState<EditorAccount | null>(null);
   // Default collapsed. Hydrated from localStorage after mount.
   const [collapsed, setCollapsed] = useState(true);
 
@@ -144,8 +242,20 @@ export default function CategoryEditor({
     }
   }
 
+  function handleExcluded(msg: string) {
+    setToast({ msg, kind: "ok", n: Date.now() });
+    onAccountExcluded?.();
+  }
+
   return (
     <div className="card">
+      {excludeTarget && (
+        <ExcludeModal
+          acct={excludeTarget}
+          onClose={() => setExcludeTarget(null)}
+          onExcluded={handleExcluded}
+        />
+      )}
       <button
         type="button"
         onClick={toggleCollapsed}
@@ -232,7 +342,7 @@ export default function CategoryEditor({
 
       {/* Table */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[780px] text-sm">
           <thead className="bg-gray-50 sticky top-0">
             <tr>
               <th className="table-th w-24">Account #</th>
@@ -240,12 +350,13 @@ export default function CategoryEditor({
               <th className="table-th">Description</th>
               <th className="table-th w-56">Category</th>
               <th className="table-th w-20">Normal</th>
+              <th className="table-th w-20 text-center">Exclude</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-400 italic">
+                <td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400 italic">
                   No accounts match.
                 </td>
               </tr>
@@ -285,6 +396,16 @@ export default function CategoryEditor({
                     </div>
                   </td>
                   <td className="table-td text-xs text-gray-500 uppercase">{acc.normal_balance}</td>
+                  <td className="table-td text-center">
+                    <button
+                      type="button"
+                      onClick={() => setExcludeTarget(acc)}
+                      title="Move this account back to excluded list"
+                      className="inline-flex items-center justify-center w-7 h-7 rounded text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
