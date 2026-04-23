@@ -6,11 +6,11 @@
 // forward snapshot nonzero), revenue, field payroll, overhead, or DJC != 0.
 //
 // Used by:
-//   - /api/metrics/route.ts  (rolling windows for payroll_runway, burn_rate;
-//                             monthly averages)
-//   - KPICards.tsx            (latest-week snapshot + revenue last-4-weeks)
-//   - TrendCharts.tsx         (last-12-weeks trend line)
-//   - dashboard/page.tsx      (header "Latest week" display)
+//   - /api/metrics/route.ts           (rolling windows for payroll_runway,
+//                                      burn_rate; monthly averages)
+//   - KPICards.tsx                     (latest-week snapshot + revenue 4-wk)
+//   - CashVsDebtChart / DebtPaydownChart / RevenueVsCostChart  (chart series)
+//   - dashboard/page.tsx               (header "Latest week" display)
 //
 // NOT used for:
 //   - /weeks list view, /weeks/[date] detail, /weekly-report       (users

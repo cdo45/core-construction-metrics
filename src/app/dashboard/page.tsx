@@ -1,54 +1,203 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { MetricsResponse } from "@/app/api/metrics/route";
+import type { PnlBreakdownResponse } from "@/app/api/pnl-breakdown/route";
 import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards";
-import TrendCharts from "@/components/dashboard/TrendCharts";
+import CashVsDebtChart from "@/components/dashboard/CashVsDebtChart";
+import DebtPaydownChart from "@/components/dashboard/DebtPaydownChart";
+import RevenueVsCostChart from "@/components/dashboard/RevenueVsCostChart";
+import PnlBreakdownTable from "@/components/dashboard/PnlBreakdownTable";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface WeeksListRow {
+  week_ending: string;
+  fiscal_year: number;
+  is_partial_week: boolean;
+  balance_count: number;
+  transaction_count: number;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function monthLabel(ym: string): string {
+  // 2025-03 → "Mar 2025"
+  const [y, m] = ym.split("-");
+  const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+  return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
 export default function DashboardPage() {
+  // useSearchParams forces client-side rendering — wrap in Suspense so the
+  // build can pre-render the static shell. Inner component holds all state.
+  return (
+    <Suspense fallback={<DashboardShell />}>
+      <DashboardInner />
+    </Suspense>
+  );
+}
+
+function DashboardShell() {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <p className="text-sm text-gray-500 mt-1">Loading…</p>
+      </div>
+      <KPISkeleton />
+    </div>
+  );
+}
+
+function DashboardInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Read URL-scoped filter state (null means "not set yet — use default").
+  const fyParam = searchParams.get("fy");
+  const monthParam = searchParams.get("month");
+
+  const [weeksList, setWeeksList] = useState<WeeksListRow[] | null>(null);
   const [data, setData] = useState<MetricsResponse | null>(null);
+  const [pnlData, setPnlData] = useState<PnlBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pnlLoading, setPnlLoading] = useState(false);
   const [error, setError] = useState("");
 
-  function fetchData() {
-    setLoading(true);
-    setError("");
-    fetch("/api/metrics")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<MetricsResponse>;
-      })
-      .then(setData)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }
-
+  // 1) Load calendar so we know which FYs + months exist and which are "active".
   useEffect(() => {
-    fetchData();
+    fetch("/api/weeks")
+      .then((r) => r.json())
+      .then((d) => Array.isArray(d) ? setWeeksList(d) : setWeeksList([]))
+      .catch(() => setWeeksList([]));
   }, []);
 
+  // Derive available FYs (DESC) and per-FY months with activity flags.
+  const { fyOptions, monthsByFy, activeMonthSet } = useMemo(() => {
+    const fySet = new Set<number>();
+    const byFy = new Map<number, Set<string>>();
+    const activeSet = new Set<string>(); // keys like "fy:month"
+    for (const w of weeksList ?? []) {
+      fySet.add(w.fiscal_year);
+      const month = w.week_ending.slice(0, 7);
+      if (!byFy.has(w.fiscal_year)) byFy.set(w.fiscal_year, new Set());
+      byFy.get(w.fiscal_year)!.add(month);
+      if (w.transaction_count > 0) activeSet.add(`${w.fiscal_year}:${month}`);
+    }
+    const fyOpts = Array.from(fySet).sort((a, b) => b - a);
+    const monthsObj: Record<number, string[]> = {};
+    for (const [fy, set] of byFy) monthsObj[fy] = Array.from(set).sort();
+    return { fyOptions: fyOpts, monthsByFy: monthsObj, activeMonthSet: activeSet };
+  }, [weeksList]);
+
+  // 2) Resolve the effective FY: URL param wins; else latest FY with activity.
+  const effectiveFy = useMemo<number | null>(() => {
+    if (fyParam && /^\d{4}$/.test(fyParam)) return parseInt(fyParam, 10);
+    if (fyOptions.length === 0) return null;
+    // Pick the newest FY that has at least one active month
+    for (const fy of fyOptions) {
+      const months = monthsByFy[fy] ?? [];
+      if (months.some((m) => activeMonthSet.has(`${fy}:${m}`))) return fy;
+    }
+    return fyOptions[0];
+  }, [fyParam, fyOptions, monthsByFy, activeMonthSet]);
+
+  const effectiveMonth = monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : null;
+
+  // 3) Fetch metrics whenever the effective filter changes.
+  const fetchMetrics = useCallback(async (fy: number | null, month: string | null) => {
+    setLoading(true);
+    setError("");
+    try {
+      const qs = new URLSearchParams();
+      if (fy !== null) qs.set("fiscal_year", String(fy));
+      if (month !== null) qs.set("month", month);
+      const url = qs.toString() ? `/api/metrics?${qs.toString()}` : "/api/metrics";
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData((await res.json()) as MetricsResponse);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // P&L breakdown uses the same FY (required) + optional month. Fire in
+  // parallel with /api/metrics so the page settles in one render cycle.
+  const fetchPnl = useCallback(async (fy: number | null, month: string | null) => {
+    if (fy === null) {
+      setPnlData(null);
+      return;
+    }
+    setPnlLoading(true);
+    try {
+      const qs = new URLSearchParams({ fiscal_year: String(fy) });
+      if (month !== null) qs.set("month", month);
+      const res = await fetch(`/api/pnl-breakdown?${qs.toString()}`);
+      if (!res.ok) {
+        setPnlData(null);
+        return;
+      }
+      setPnlData((await res.json()) as PnlBreakdownResponse);
+    } catch {
+      setPnlData(null);
+    } finally {
+      setPnlLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (effectiveFy === null) return; // wait for weeksList
+    fetchMetrics(effectiveFy, effectiveMonth);
+    fetchPnl(effectiveFy, effectiveMonth);
+  }, [effectiveFy, effectiveMonth, fetchMetrics, fetchPnl]);
+
+  // 4) Toggle handlers — update the URL; a router.replace keeps history clean.
+  function updateUrl(nextFy: number | null, nextMonth: string | null) {
+    const qs = new URLSearchParams();
+    if (nextFy !== null) qs.set("fy", String(nextFy));
+    if (nextMonth !== null) qs.set("month", nextMonth);
+    const suffix = qs.toString();
+    router.replace(suffix ? `/dashboard?${suffix}` : "/dashboard");
+  }
+
+  function selectFy(fy: number) {
+    // Changing FY drops any month selection — months are scoped to the FY.
+    updateUrl(fy, null);
+  }
+
+  function selectMonth(month: string | null) {
+    updateUrl(effectiveFy, month);
+  }
+
+  // 5) Render helpers for toggle pills.
+  const currentMonths = effectiveFy !== null ? (monthsByFy[effectiveFy] ?? []) : [];
   const weeks = data?.weeks ?? [];
-  // "Latest" in the header = last week WITH imported activity. Falls back to
-  // the literal last row if no week has activity yet (initial setup).
   const [latestActive] = lastActiveWeeks(weeks, 1);
   const latest = latestActive ?? weeks[weeks.length - 1];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="flex items-center justify-between mb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">
             {latest
-              ? `Latest week: ${fmtDate(latest.week_ending)} · ${weeks.length} weeks on record`
+              ? `Latest active week: ${fmtDate(latest.week_ending)} · ${weeks.length} weeks in view`
               : loading
               ? "Loading…"
-              : "No data yet"}
+              : "No data in this period"}
           </p>
         </div>
         <button
-          onClick={fetchData}
+          onClick={() => fetchMetrics(effectiveFy, effectiveMonth)}
           disabled={loading}
           className="btn-secondary flex items-center gap-2 disabled:opacity-50"
         >
@@ -65,6 +214,69 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* FY + Month toggles */}
+      {fyOptions.length > 0 && (
+        <div className="card px-4 py-3 mb-6 flex flex-col gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider w-20">Fiscal Yr</span>
+            <div className="flex flex-wrap gap-2">
+              {fyOptions.map((fy) => {
+                const selected = fy === effectiveFy;
+                return (
+                  <button
+                    key={fy}
+                    onClick={() => selectFy(fy)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      selected
+                        ? "bg-[#1B2A4A] text-white border-[#1B2A4A]"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {fy}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider w-20">Month</span>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => selectMonth(null)}
+                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  effectiveMonth === null
+                    ? "bg-[#1B2A4A] text-white border-[#1B2A4A]"
+                    : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                }`}
+              >
+                All
+              </button>
+              {currentMonths.map((m) => {
+                const selected = effectiveMonth === m;
+                const isActive = effectiveFy !== null && activeMonthSet.has(`${effectiveFy}:${m}`);
+                return (
+                  <button
+                    key={m}
+                    onClick={() => selectMonth(m)}
+                    disabled={!isActive}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                      selected
+                        ? "bg-[#1B2A4A] text-white border-[#1B2A4A]"
+                        : !isActive
+                        ? "bg-gray-50 text-gray-300 border-gray-200 cursor-not-allowed"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {monthLabel(m)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="mb-6 flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
           <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -76,19 +288,37 @@ export default function DashboardPage() {
 
       {!loading && !error && weeks.length === 0 && (
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm px-6 py-16 text-center mb-6">
-          <p className="text-sm text-gray-500 mb-2 font-medium">No weekly data yet.</p>
+          <p className="text-sm text-gray-500 mb-2 font-medium">No data in this period.</p>
           <p className="text-xs text-gray-400">
-            Head to{" "}
-            <a href="/weeks" className="text-[#1B2A4A] underline">All Weeks</a>{" "}
-            and enter at least one week to populate the dashboard.
+            Try a different fiscal year or month, or import a CSV on the{" "}
+            <a href="/import" className="text-[#1B2A4A] underline">Import</a> page.
           </p>
         </div>
       )}
 
       <div className="flex flex-col gap-8">
         {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
-        {!loading && weeks.length > 0 && <TrendCharts weeks={weeks} />}
+
+        {!loading && weeks.length > 0 && (
+          <>
+            <SectionHeader>═══ CASH FLOW ═══</SectionHeader>
+            <CashVsDebtChart weeks={weeks} />
+            <DebtPaydownChart weeks={weeks} />
+
+            <SectionHeader>═══ P&amp;L ═══</SectionHeader>
+            <RevenueVsCostChart weeks={weeks} />
+            <PnlBreakdownTable data={pnlData} loading={pnlLoading} />
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-widest text-center mt-2">
+      {children}
+    </h2>
   );
 }

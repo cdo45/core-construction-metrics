@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { isActiveWeek, lastActiveWeeks } from "@/lib/active-weeks";
 
@@ -37,6 +37,10 @@ export interface WeekMetric {
   cat_7_overhead: number;
   cat_8_revenue: number;
   cat_9_djc: number;
+
+  // Debt paydown (dollars moved off current-debt balance this week).
+  // Cat 3 is credit-normal liabilities; a DEBIT post pays the balance down.
+  cat_3_debt_paydown: number;
 
   // Derived ratios (computed over this week)
   net_liquidity: number;
@@ -97,13 +101,26 @@ function safeDiv(a: number, b: number): number | null {
 
 // ─── Route ───────────────────────────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const sql = getDb();
+
+    // ── Query-param filtering ────────────────────────────────────────────────
+    // fiscal_year comes from the weeks table (auto-computed on auto-create);
+    // we never compute it off week_ending year so year-boundary partial weeks
+    // stay grouped with their dateBooked year.
+    // month is a YYYY-MM string used as TO_CHAR(week_ending, 'YYYY-MM').
+    const { searchParams } = new URL(req.url);
+    const fyRaw = searchParams.get("fiscal_year");
+    const monthRaw = searchParams.get("month");
+    const fyFilter = fyRaw && /^\d{4}$/.test(fyRaw) ? parseInt(fyRaw, 10) : null;
+    const monthFilter = monthRaw && /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : null;
 
     // Single query: one row per (week, category) with sums.
     // Always JOIN fresh so changing gl_accounts.category_id retroactively
     // reclassifies history without any data migration.
+    // Filters are applied at the weeks JOIN; if both params are null they
+    // become no-ops (the ($x::text IS NULL OR …) pattern).
     const rawRollups = await sql`
       SELECT
         wb.week_ending::text AS week_ending,
@@ -113,8 +130,11 @@ export async function GET() {
         SUM(wb.period_credit)::numeric AS cat_pc
       FROM weekly_balances wb
       JOIN gl_accounts ga ON ga.id = wb.gl_account_id
+      JOIN weeks w         ON w.week_ending = wb.week_ending
       WHERE ga.category_id IS NOT NULL
         AND ga.is_active = true
+        AND (${fyFilter}::int  IS NULL OR w.fiscal_year = ${fyFilter}::int)
+        AND (${monthFilter}::text IS NULL OR TO_CHAR(w.week_ending, 'YYYY-MM') = ${monthFilter}::text)
       GROUP BY wb.week_ending, ga.category_id
       ORDER BY wb.week_ending ASC, ga.category_id ASC
     `;
@@ -122,6 +142,8 @@ export async function GET() {
     const weekRows = await sql`
       SELECT week_ending::text AS week_ending, is_confirmed
       FROM weeks
+      WHERE (${fyFilter}::int  IS NULL OR fiscal_year = ${fyFilter}::int)
+        AND (${monthFilter}::text IS NULL OR TO_CHAR(week_ending, 'YYYY-MM') = ${monthFilter}::text)
       ORDER BY week_ending ASC
     `;
     const confirmedMap = new Map<string, boolean>();
@@ -188,6 +210,12 @@ export async function GET() {
       const cat_8_revenue       = plSigned(CAT.REVENUE,       true);
       const cat_9_djc           = plSigned(CAT.DJC,           false);
 
+      // Debt paydown = total debit posts to credit-normal liability accounts
+      // in this period. Not signed against period_credit; a new draw (credit
+      // post) doesn't "undo" a paydown on the same debt line within a week,
+      // they're separate cash events.
+      const cat_3_debt_paydown  = get(CAT.CURRENT_DEBT)?.pd    ?? 0;
+
       const net_liquidity = cat_1_cash - cat_3_current_debt - cat_5_payroll_liab;
 
       const currentLiab = cat_3_current_debt + cat_5_payroll_liab;
@@ -217,6 +245,7 @@ export async function GET() {
         cat_7_overhead,
         cat_8_revenue,
         cat_9_djc,
+        cat_3_debt_paydown,
         net_liquidity,
         current_ratio,
         quick_ratio,
