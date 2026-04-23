@@ -151,6 +151,9 @@ export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
   const latest = activeTail[activeTail.length - 1] ?? weeks[weeks.length - 1];
   const revenue4wk = activeTail.reduce((s, w) => s + w.cat_8_revenue, 0);
 
+  const fmtRatio = (v: number | null | undefined) =>
+    v === null || v === undefined || !isFinite(v) ? "—" : v.toFixed(2);
+
   return (
     <div className="flex flex-col gap-6">
       <SectionRow title="Liquidity">
@@ -165,13 +168,13 @@ export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
           label="Net Liquidity"
           value={fmtMoneyShort(latest.net_liquidity)}
           delta={latest.net_liquidity_change}
-          subtitle="Cash minus current obligations"
+          subtitle="Cash − AP − Payroll Accruals"
           accent={COLORS.netLiq}
         />
         <KPICard
-          label="Payroll Runway"
-          value={fmtWeeks(latest.payroll_runway_wks)}
-          subtitle="Cash ÷ weekly field payroll"
+          label="Cash Coverage"
+          value={fmtWeeks(latest.cash_coverage_weeks)}
+          subtitle="Weeks of AP covered by Cash"
           accent={COLORS.runway}
         />
       </SectionRow>
@@ -185,17 +188,37 @@ export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
           accent={COLORS.ar}
         />
         <KPICard
-          label="Current Debt"
-          value={fmtMoneyShort(latest.cat_3_current_debt)}
-          delta={latest.current_debt_change}
-          subtitle="ST obligations"
+          label="AP"
+          value={fmtMoneyShort(latest.ap)}
+          subtitle="Account 2005 A/P Trade"
           accent={COLORS.debt}
           inverseDelta={true}
         />
         <KPICard
+          label="Payroll Runway"
+          value={fmtWeeks(latest.payroll_runway_wks)}
+          subtitle="Weeks of Payroll covered by Cash"
+          accent={COLORS.runway}
+        />
+      </SectionRow>
+
+      <SectionRow title="Ratios">
+        <KPICard
           label="Current Ratio"
-          value={latest.current_ratio !== null ? latest.current_ratio.toFixed(2) : "—"}
-          subtitle="(Cash + AR) ÷ Current Liab"
+          value={fmtRatio(latest.current_ratio)}
+          subtitle="(Cash + AR) ÷ (AP + Payroll Accruals)"
+          accent={COLORS.ratio}
+        />
+        <KPICard
+          label="Quick Ratio"
+          value={fmtRatio(latest.quick_ratio)}
+          subtitle="Cash ÷ (AP + Payroll Accruals)"
+          accent={COLORS.ratio}
+        />
+        <KPICard
+          label="AR to AP"
+          value={fmtRatio(latest.ar_to_ap)}
+          subtitle="AR ÷ AP"
           accent={COLORS.ratio}
         />
       </SectionRow>
