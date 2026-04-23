@@ -642,12 +642,149 @@ function JobTab({ baseline }: { baseline: Baseline }) {
   );
 }
 
-// ─── Placeholder tab (Debt — lands in next commit) ───────────────────────────
+// ─── Debt Paydown tab ────────────────────────────────────────────────────────
 
-function StubTab({ label }: { label: string }) {
+function DebtPaydownTab({ baseline }: { baseline: Baseline }) {
+  const [amount, setAmount] = useState("");
+  const [targetId, setTargetId] = useState<string>("");
+  const [accounts, setAccounts] = useState<GlAccountRow[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+
+  // Pull only Cat-3 (current debt) and Cat-5 (payroll liab) accounts —
+  // the only liabilities it makes sense to target with a cash paydown.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/gl-accounts?category=3,5")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: GlAccountRow[]) => {
+        if (cancelled) return;
+        const filtered = data.filter((a) => a.is_active);
+        setAccounts(filtered);
+      })
+      .catch(() => {
+        if (!cancelled) setAccounts([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAccountsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const dAmount = useDebounced(amount);
+  const amountNum = parseFloat(dAmount) || 0;
+  const target = accounts.find((a) => String(a.id) === targetId);
+  // Stored liability balances are credit-normal → negative. Flip to positive
+  // for display so "current balance" reads like a bill.
+  const currentBalance = target?.latest_end_balance != null
+    ? Math.abs(Number(target.latest_end_balance))
+    : null;
+  const newTargetBalance = currentBalance !== null
+    ? Math.max(0, currentBalance - amountNum)
+    : null;
+
+  const newCash = baseline.cash - amountNum;
+  const newBurn = baseline.burn; // one-time paydown leaves weekly burn alone
+  const newRunway = newBurn > 0 ? newCash / newBurn : null;
+
+  const scenario: Scenario = useMemo(() => ({
+    new_collections: baseline.collections,
+    new_burn: newBurn,
+    cash_step: amountNum,
+  }), [baseline, newBurn, amountNum]);
+
+  let verdict: { kind: VerdictKind; text: string } | null = null;
+  if (amountNum > 0 && targetId) {
+    if (newCash <= 0 || newRunway === null) {
+      verdict = { kind: "bad", text: "Cash-constrained — payment exceeds available cash." };
+    } else if (newRunway >= 12) {
+      verdict = { kind: "good", text: "Accretive — clears debt safely (≥12 weeks of runway)." };
+    } else if (newRunway >= 6) {
+      verdict = { kind: "warn", text: "Neutral — tightens runway but bearable (6-12 weeks)." };
+    } else {
+      verdict = { kind: "bad", text: "Cash-constrained — defer paydown (runway under 6 weeks)." };
+    }
+  }
+
+  const hasInputs = amountNum > 0 && !!targetId;
+
   return (
-    <div className="text-xs text-gray-400 italic py-10 text-center">
-      {label} — coming in the next commit.
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <MoneyInput
+          label="Payment amount"
+          value={amount}
+          onChange={setAmount}
+          help="Cash you'd send out to pay down the target liability. Exits cash immediately; no change to weekly burn."
+        />
+        <label className="flex flex-col gap-1 text-xs text-gray-600">
+          <span className="flex items-center gap-1">
+            Target account
+            <InfoTooltip text="Dropdown shows active Current Debt (category 3) and Payroll Liability (category 5) accounts. Each entry includes its most-recent end-of-week balance." />
+          </span>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            disabled={accountsLoading}
+            className="select-field"
+          >
+            <option value="">— Select a liability —</option>
+            {accounts.map((a) => {
+              const bal = a.latest_end_balance != null
+                ? fmtMoneyShort(Math.abs(Number(a.latest_end_balance)))
+                : "—";
+              return (
+                <option key={a.id} value={a.id}>
+                  {a.account_no} — {a.description} ({bal})
+                </option>
+              );
+            })}
+          </select>
+        </label>
+      </div>
+
+      {!hasInputs ? (
+        <p className="text-xs text-gray-400 italic">
+          {accountsLoading ? "Loading accounts…" : "Enter an amount and pick a target to see impact."}
+        </p>
+      ) : (
+        <>
+          <div className="bg-gray-50 rounded-md p-3">
+            <OutputRow
+              label="Cash reduction (immediate)"
+              value={`-${fmtMoneyShort(amountNum)}`}
+              valueColor="text-red-700"
+            />
+            <OutputRow
+              label={`Debt reduction on ${target?.account_no ?? ""}`}
+              value={`-${fmtMoneyShort(amountNum)}`}
+              valueColor="text-green-700"
+            />
+            {currentBalance !== null && (
+              <OutputRow
+                label="New target account balance"
+                value={fmtMoneyFull(newTargetBalance ?? 0)}
+                help="Current balance on the target account minus your payment, floored at zero."
+              />
+            )}
+            <OutputRow
+              label="New cash on hand"
+              value={fmtMoneyShort(newCash)}
+              valueColor={newCash >= 0 ? "text-gray-900" : "text-red-700"}
+            />
+            <OutputRow label="New weekly burn" value={`${fmtMoneyShort(newBurn)}/wk`} help="Unchanged — a one-time paydown doesn't change your recurring obligations." />
+            <OutputRow label="New weeks of runway" value={fmtWeeks(newRunway)} emphasize />
+            <OutputRow label="Interest saved estimate" value="n/a" help="We don't store loan rates, so we can't estimate interest saved. Add a rate column to gl_accounts if this matters." />
+            {verdict && <VerdictBadge kind={verdict.kind} text={verdict.text} />}
+          </div>
+
+          <WhatIfComparisonChart
+            metrics={compareMetrics(baseline, scenario)}
+            cashProjection={projectCash(baseline, scenario)}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -712,7 +849,7 @@ export default function WhatIfCalculator({ runway }: { runway: RunwaySummary | n
         ) : tab === "job" ? (
           <JobTab baseline={baseline} />
         ) : (
-          <StubTab label="Debt Paydown tab" />
+          <DebtPaydownTab baseline={baseline} />
         )}
       </div>
     </div>
