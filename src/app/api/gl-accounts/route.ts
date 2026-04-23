@@ -1,10 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
-// GET /api/gl-accounts — list all GL accounts with category name and balance_count joined
-export async function GET() {
+// GET /api/gl-accounts
+//   Optional ?category=3,5 — filter to a comma-separated list of category_ids.
+//   Additive `latest_end_balance` field — most recent week's end_balance per
+//   account, used by the debt-paydown tab in the What-If calculator.
+export async function GET(req: NextRequest) {
   try {
     const sql = getDb();
+
+    const { searchParams } = new URL(req.url);
+    const catRaw = searchParams.get("category");
+    const catIds: number[] = [];
+    if (catRaw) {
+      for (const part of catRaw.split(",")) {
+        const n = parseInt(part.trim(), 10);
+        if (Number.isInteger(n) && n > 0) catIds.push(n);
+      }
+    }
+    // If a category filter is provided but parses empty, return [] rather
+    // than silently returning all accounts.
+    const applyCatFilter = catRaw !== null && catIds.length > 0;
+    const catFilterArr = applyCatFilter ? catIds : null;
+
     const accounts = await sql`
       SELECT
         g.id,
@@ -18,7 +36,8 @@ export async function GET() {
         g.created_at,
         COUNT(DISTINCT wb.id)::int       AS balance_count,
         COALESCE(tx.tx_count, 0)::int    AS tx_count,
-        COALESCE(tx.week_count, 0)::int  AS tx_week_count
+        COALESCE(tx.week_count, 0)::int  AS tx_week_count,
+        latest.end_balance               AS latest_end_balance
       FROM gl_accounts g
       LEFT JOIN categories c ON c.id = g.category_id
       LEFT JOIN weekly_balances wb ON wb.gl_account_id = g.id
@@ -29,7 +48,15 @@ export async function GET() {
         FROM weekly_transactions
         GROUP BY gl_account_id
       ) tx ON tx.gl_account_id = g.id
-      GROUP BY g.id, c.name, c.color, tx.tx_count, tx.week_count
+      LEFT JOIN LATERAL (
+        SELECT end_balance
+        FROM weekly_balances
+        WHERE gl_account_id = g.id
+        ORDER BY week_ending DESC
+        LIMIT 1
+      ) latest ON true
+      WHERE (${catFilterArr}::int[] IS NULL OR g.category_id = ANY(${catFilterArr}::int[]))
+      GROUP BY g.id, c.name, c.color, tx.tx_count, tx.week_count, latest.end_balance
       ORDER BY g.account_no ASC
     `;
     return NextResponse.json(accounts);
