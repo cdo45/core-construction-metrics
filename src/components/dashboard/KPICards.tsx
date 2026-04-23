@@ -1,6 +1,6 @@
 "use client";
 
-import type { WeekMetric } from "@/app/api/metrics/route";
+import type { WeekMetric, PnlSummary } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -142,14 +142,21 @@ const COLORS = {
   opMargin:  "#5D3A9B",
 };
 
-export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
+export default function KPICards({
+  weeks,
+  pnl,
+}: {
+  weeks: WeekMetric[];
+  /** Window-level P&L totals; when provided, the P&L row shows
+   *  filter-window totals instead of per-week snapshots. */
+  pnl?: PnlSummary | null;
+}) {
   if (weeks.length === 0) return <KPISkeleton />;
 
   // Anchor on the last week WITH ACTIVITY — zero-activity future weeks are
   // configured but unimported and would otherwise blank out every metric.
   const activeTail = lastActiveWeeks(weeks, 4);
   const latest = activeTail[activeTail.length - 1] ?? weeks[weeks.length - 1];
-  const revenue4wk = activeTail.reduce((s, w) => s + w.cat_8_revenue, 0);
 
   const fmtRatio = (v: number | null | undefined) =>
     v === null || v === undefined || !isFinite(v) ? "—" : v.toFixed(2);
@@ -223,23 +230,23 @@ export default function KPICards({ weeks }: { weeks: WeekMetric[] }) {
         />
       </SectionRow>
 
-      <SectionRow title="P&L (last 4 weeks)">
+      <SectionRow title="P&L (filter window)">
         <KPICard
-          label="Revenue (last 4 wks)"
-          value={fmtMoneyShort(revenue4wk)}
-          subtitle="Rolling 4-week revenue"
+          label="Revenue"
+          value={fmtMoneyShort(pnl?.revenue ?? 0)}
+          subtitle="Period activity in view"
           accent={COLORS.revenue}
         />
         <KPICard
           label="Gross Margin %"
-          value={fmtPct(latest.gross_margin_pct)}
-          subtitle="(Rev − DJC) ÷ Rev"
+          value={fmtPct(pnl?.gross_margin_pct)}
+          subtitle="(Revenue − DJC) ÷ Revenue"
           accent={COLORS.margin}
         />
         <KPICard
           label="Operating Margin %"
-          value={fmtPct(latest.operating_margin_pct)}
-          subtitle="After overhead + field payroll"
+          value={fmtPct(pnl?.operating_margin_pct)}
+          subtitle="After DJC + Payroll + Overhead"
           accent={COLORS.opMargin}
         />
       </SectionRow>

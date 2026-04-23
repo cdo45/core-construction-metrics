@@ -141,10 +141,29 @@ export interface MonthMetric {
   win_rate_pct: number;
 }
 
+// ─── P&L window totals ───────────────────────────────────────────────────────
+//
+// Computed over the entire filter window (FY + optional month). These are
+// the numbers the KPI cards should show when the user asks "how much
+// revenue did we do in FY 2025?" — NOT the latest week's P&L alone.
+//
+// All totals are non-negative (Math.abs applied). Margin is null when the
+// denominator is 0 to avoid divide-by-zero.
+export interface PnlSummary {
+  revenue: number;
+  djc: number;
+  payroll_field: number;
+  overhead: number;
+  operating_income: number;
+  gross_margin_pct: number | null;       // (revenue − djc) / revenue
+  operating_margin_pct: number | null;   // operating_income / revenue
+}
+
 export interface MetricsResponse {
   weeks: WeekMetric[];
   months: MonthMetric[];
   runway: RunwaySummary;
+  pnl: PnlSummary;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -357,15 +376,28 @@ export async function GET(req: NextRequest) {
       const cat_4_lt_debt        =       (get(CAT.LT_DEBT)?.end       ?? 0);
       const cat_5_payroll_liab   = Math.abs(get(CAT.PAYROLL_LIAB)?.end ?? 0);
 
-      const plSigned = (id: number, creditNormal: boolean) => {
+      // P&L sign flip is hardcoded by category_id, NOT by ga.normal_balance.
+      // A revenue account with a mis-configured `debit` normal_balance used
+      // to come back negative; hardcoding here makes the displayed number
+      // independent of that data-quality hazard. All four are wrapped in
+      // Math.abs for display — in normal bookkeeping the signs work out
+      // positive, so |x| is a safety belt.
+      //   cat 6 Payroll Field / cat 7 Overhead / cat 9 DJC: pd − pc (expense)
+      //   cat 8 Revenue:                                     pc − pd
+      const plExpense = (id: number) => {
         const row = get(id);
         if (!row) return 0;
-        return creditNormal ? row.pc - row.pd : row.pd - row.pc;
+        return Math.abs(row.pd - row.pc);
       };
-      const cat_6_payroll_field = plSigned(CAT.PAYROLL_FIELD, false);
-      const cat_7_overhead      = plSigned(CAT.OVERHEAD,      false);
-      const cat_8_revenue       = Math.abs(plSigned(CAT.REVENUE, true));
-      const cat_9_djc           = plSigned(CAT.DJC,           false);
+      const plRevenue = () => {
+        const row = get(CAT.REVENUE);
+        if (!row) return 0;
+        return Math.abs(row.pc - row.pd);
+      };
+      const cat_6_payroll_field = plExpense(CAT.PAYROLL_FIELD);
+      const cat_7_overhead      = plExpense(CAT.OVERHEAD);
+      const cat_8_revenue       = plRevenue();
+      const cat_9_djc           = plExpense(CAT.DJC);
 
       const cat_3_debt_paydown  = get(CAT.CURRENT_DEBT)?.pd    ?? 0;
 
@@ -593,7 +625,33 @@ export async function GET(req: NextRequest) {
       anchor_week_ending: anchor?.week_ending ?? null,
     };
 
-    return NextResponse.json({ weeks, months, runway } satisfies MetricsResponse);
+    // ── P&L window totals ───────────────────────────────────────────────────
+    // Sum over every week in the filter window (NOT last-N active). A user
+    // looking at "FY 2025" expects the full-year total, not a 4-week trail.
+    // Per-week fields are already |pd − pc|, so summing them preserves the
+    // window-total period-activity meaning.
+    let pnlRevenue = 0;
+    let pnlDjc = 0;
+    let pnlPayrollField = 0;
+    let pnlOverhead = 0;
+    for (const w of weeks) {
+      pnlRevenue      += w.cat_8_revenue;
+      pnlDjc          += w.cat_9_djc;
+      pnlPayrollField += w.cat_6_payroll_field;
+      pnlOverhead     += w.cat_7_overhead;
+    }
+    const pnlOpIncome = pnlRevenue - pnlDjc - pnlPayrollField - pnlOverhead;
+    const pnl: PnlSummary = {
+      revenue:              pnlRevenue,
+      djc:                  pnlDjc,
+      payroll_field:        pnlPayrollField,
+      overhead:             pnlOverhead,
+      operating_income:     pnlOpIncome,
+      gross_margin_pct:     pnlRevenue !== 0 ? ((pnlRevenue - pnlDjc) / pnlRevenue) * 100 : null,
+      operating_margin_pct: pnlRevenue !== 0 ? (pnlOpIncome / pnlRevenue) * 100 : null,
+    };
+
+    return NextResponse.json({ weeks, months, runway, pnl } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

@@ -308,7 +308,7 @@ function DashboardInner() {
       )}
 
       <div className="flex flex-col gap-8">
-        {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
+        {loading ? <KPISkeleton /> : <KPICards weeks={weeks} pnl={data?.pnl ?? null} />}
 
         {!loading && weeks.length > 0 && (
           <>

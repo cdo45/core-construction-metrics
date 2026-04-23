@@ -52,8 +52,13 @@ export async function GET(req: NextRequest) {
     const fiscalYear = parseInt(fyRaw, 10);
     const month = monthRaw && /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : null;
 
-    // Account-level rollup. HAVING clause hides dormant accounts that landed
-    // under a P&L category but had no activity in the filtered window.
+    // Account-level rollup. Period-activity ONLY (no end_balance). Sign flip
+    // is hardcoded by category_id instead of gl_accounts.normal_balance so
+    // a mis-configured revenue account (normal_balance='debit') can't
+    // render as a large negative.
+    //   cat 8 (Revenue):                             period_credit − period_debit
+    //   cat 6 / 7 / 9 (Payroll Field / OH / DJC):    period_debit − period_credit
+    // HAVING hides dormant accounts that have zero activity in the window.
     const rows = await sql`
       SELECT
         ga.category_id,
@@ -62,7 +67,7 @@ export async function GET(req: NextRequest) {
         ga.description,
         SUM(
           CASE
-            WHEN ga.normal_balance = 'credit' THEN wb.period_credit - wb.period_debit
+            WHEN ga.category_id = ${CAT.REVENUE} THEN wb.period_credit - wb.period_debit
             ELSE wb.period_debit - wb.period_credit
           END
         )::numeric AS signed_total
@@ -85,17 +90,27 @@ export async function GET(req: NextRequest) {
       [CAT.DJC]:           { total: 0, accounts: [] },
     };
 
+    // Display values are positive magnitudes — the category's sign is
+    // implicit (Revenue adds, cost categories subtract). Wrapping in
+    // Math.abs guards against legitimate negative weeks (e.g. a refund-
+    // heavy week) masquerading as the sign of an accounting mistake.
     for (const r of rows) {
       const cid = Number(r.category_id);
-      const total = parseFloat(String(r.signed_total));
+      const displayTotal = Math.abs(parseFloat(String(r.signed_total)));
       if (!groups[cid]) continue;
       groups[cid].accounts.push({
         account_no: Number(r.account_no),
         division: String(r.division ?? ""),
         description: String(r.description ?? ""),
-        total,
+        total: displayTotal,
       });
-      groups[cid].total += total;
+      groups[cid].total += displayTotal;
+    }
+
+    // Re-sort per-category by display value (desc) — the SQL ORDER BY was
+    // on signed_total which isn't the same order after the Math.abs above.
+    for (const cid of Object.keys(groups) as unknown as number[]) {
+      groups[cid].accounts.sort((a, b) => b.total - a.total);
     }
 
     const revenue         = groups[CAT.REVENUE];
@@ -103,6 +118,8 @@ export async function GET(req: NextRequest) {
     const payroll_field   = groups[CAT.PAYROLL_FIELD];
     const overhead        = groups[CAT.OVERHEAD];
 
+    // Op Income = Revenue − all cost buckets. Each category total is a
+    // positive magnitude, so subtraction reflects accounting direction.
     const operating_income =
       revenue.total -
       direct_job_costs.total -
