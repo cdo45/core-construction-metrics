@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { MetricsResponse } from "@/app/api/metrics/route";
 import KPICards, { KPISkeleton, fmtDate } from "@/components/dashboard/KPICards";
+import TrendCharts from "@/components/dashboard/TrendCharts";
 
 export default function DashboardPage() {
   const [data, setData] = useState<MetricsResponse | null>(null);
@@ -82,7 +83,7 @@ export default function DashboardPage() {
 
       <div className="flex flex-col gap-8">
         {loading ? <KPISkeleton /> : <KPICards weeks={weeks} />}
-        {/* Trend charts added in chunk 3 below */}
+        {!loading && weeks.length > 0 && <TrendCharts weeks={weeks} />}
       </div>
     </div>
   );
