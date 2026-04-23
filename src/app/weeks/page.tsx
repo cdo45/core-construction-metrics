@@ -104,6 +104,16 @@ export default function WeeksPage() {
             Weekly balance snapshots and activity history.
           </p>
         </div>
+        <button
+          onClick={addNextWeek}
+          disabled={adding || weeks.length === 0}
+          className="btn-primary flex items-center gap-2 disabled:opacity-60"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          {adding ? "Adding…" : "Add Next Week"}
+        </button>
       </div>
 
       {loading ? (
@@ -123,63 +133,49 @@ export default function WeeksPage() {
           </p>
         </div>
       ) : (
-        <>
-          <div className="card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <th className="table-th">Week Ending</th>
-                    <th className="table-th">Status</th>
-                    <th className="table-th w-8" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {weeks.map((w) => (
-                    <tr
-                      key={w.week_ending}
-                      className="hover:bg-gray-50 cursor-pointer transition-colors"
-                      onClick={() => router.push(`/weeks/${w.week_ending}`)}
-                    >
-                      <td className="table-td">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-gray-900">
-                            {fmtDate(w.week_ending)}
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  <th className="table-th">Week Ending</th>
+                  <th className="table-th">Status</th>
+                  <th className="table-th w-8" />
+                </tr>
+              </thead>
+              <tbody>
+                {weeks.map((w) => (
+                  <tr
+                    key={w.week_ending}
+                    className="hover:bg-gray-50 cursor-pointer transition-colors"
+                    onClick={() => router.push(`/weeks/${w.week_ending}`)}
+                  >
+                    <td className="table-td">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-gray-900">
+                          {fmtDate(w.week_ending)}
+                        </span>
+                        {w.is_partial_week && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-600">
+                            Partial
                           </span>
-                          {w.is_partial_week && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-600">
-                              Partial
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="table-td">
-                        <StatusBadge status={w.status} />
-                      </td>
-                      <td className="table-td text-right text-gray-400">
-                        <svg className="w-4 h-4 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                        </svg>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-td">
+                      <StatusBadge status={w.status} />
+                    </td>
+                    <td className="table-td text-right text-gray-400">
+                      <svg className="w-4 h-4 inline-block" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="mt-4 flex justify-center">
-            <button
-              onClick={addNextWeek}
-              disabled={adding}
-              className="btn-primary flex items-center gap-2 disabled:opacity-60"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {adding ? "Adding…" : "Add Next Week"}
-            </button>
-          </div>
-        </>
+        </div>
       )}
 
       {toast && (
