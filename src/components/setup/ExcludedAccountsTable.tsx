@@ -38,6 +38,73 @@ function fmtDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
+// ─── Suggestion rules ─────────────────────────────────────────────────────────
+// Category IDs are assumed id-keyed 1–9 per the seed conventions:
+//   1=Cash, 2=AR, 3=Current Notes, 4=LT Notes, 5=Payroll, 7=Overhead,
+//   8=Revenue, 9=DJC.
+// Returns null for category when the rule is ambiguous — user picks.
+
+export interface Suggestion {
+  categoryId: number | null;
+  normalBalance: "debit" | "credit";
+}
+
+export function suggestForAccount(
+  accountNoStr: string,
+  division: string,
+  totalDr: number,
+  totalCr: number
+): Suggestion {
+  const acctNo = parseInt(accountNoStr, 10);
+  if (!isFinite(acctNo)) return { categoryId: null, normalBalance: "debit" };
+
+  const leading = Math.floor(acctNo / 1000); // 4567 → 4
+  const div = (division ?? "").trim();
+  const divNum = parseInt(div, 10);
+  const isJobDiv = isFinite(divNum) && (divNum === 10 || divNum === 30 || (divNum >= 20 && divNum <= 24));
+  const isOverheadDiv = div === "99";
+  // High-order two digits, for 10xx/11xx/24xx/25xx/26xx rules
+  const hi2 = Math.floor(acctNo / 100); // 1010 → 10, 1150 → 11
+
+  // 4xxx Revenue (credit)
+  if (leading === 4) return { categoryId: 8, normalBalance: "credit" };
+
+  // 5xxx / 6xxx — job vs overhead split by division
+  if (leading === 5 || leading === 6) {
+    if (isJobDiv) return { categoryId: 9, normalBalance: "debit" };
+    if (isOverheadDiv) return { categoryId: 7, normalBalance: "debit" };
+    return { categoryId: null, normalBalance: "debit" };
+  }
+
+  // 7xxx Overhead (debit)
+  if (leading === 7) return { categoryId: 7, normalBalance: "debit" };
+
+  // 8xxx other income/expense → overhead; side by activity weight
+  if (leading === 8) {
+    const normal: "debit" | "credit" = totalCr > totalDr ? "credit" : "debit";
+    return { categoryId: 7, normalBalance: normal };
+  }
+
+  // 9xxx Bad debt → overhead (debit)
+  if (leading === 9) return { categoryId: 7, normalBalance: "debit" };
+
+  // 1xxx Assets
+  if (leading === 1) {
+    if (hi2 === 10) return { categoryId: 1, normalBalance: "debit" };
+    if (hi2 === 11) return { categoryId: 2, normalBalance: "debit" };
+    return { categoryId: null, normalBalance: "debit" };
+  }
+
+  // 2xxx Liabilities — only confident about 24xx and 25xx/26xx
+  if (leading === 2) {
+    if (hi2 === 24) return { categoryId: 3, normalBalance: "credit" };
+    if (hi2 === 25 || hi2 === 26) return { categoryId: 4, normalBalance: "credit" };
+    return { categoryId: null, normalBalance: "credit" };
+  }
+
+  return { categoryId: null, normalBalance: "debit" };
+}
+
 // ─── Toast ────────────────────────────────────────────────────────────────────
 
 function Toast({
@@ -116,9 +183,17 @@ function ActivateModal({
   onClose: () => void;
   onActivated: (msg: string) => void;
 }) {
+  const suggestion = suggestForAccount(
+    acct.basic_account_no,
+    acct.division,
+    acct.total_dr,
+    acct.total_cr
+  );
   const [description, setDescription] = useState(acct.description);
-  const [categoryId, setCategoryId] = useState<string>("");
-  const [normalBalance, setNormalBalance] = useState<"debit" | "credit">("debit");
+  const [categoryId, setCategoryId] = useState<string>(
+    suggestion.categoryId != null ? String(suggestion.categoryId) : ""
+  );
+  const [normalBalance, setNormalBalance] = useState<"debit" | "credit">(suggestion.normalBalance);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -179,7 +254,12 @@ function ActivateModal({
           />
         </div>
         <div>
-          <label className="block text-xs text-gray-600 mb-1">Category</label>
+          <label className="block text-xs text-gray-600 mb-1">
+            Category
+            {suggestion.categoryId != null && (
+              <span className="ml-2 text-[10px] text-gray-400">(suggested)</span>
+            )}
+          </label>
           <select
             value={categoryId}
             onChange={(e) => setCategoryId(e.target.value)}
