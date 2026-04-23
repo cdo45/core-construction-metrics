@@ -143,9 +143,11 @@ function CategoryMovementTable({ cat, hasPrior }: { cat: ReportCategory; hasPrio
   const displayAccounts = showAll ? cat.accounts : changedAccounts;
   const hasChanges = changedAccounts.length > 0;
 
-  // For "favorable" coloring: cash up = good; AR up = good; AP up = bad; payroll up = bad
-  const isCostCategory =
-    cat.name === "Who We Owe" || cat.name === "Payroll Liabilities";
+  // For "favorable" coloring: cash up = good; AR up = good; debt/payroll up = bad.
+  // Cost categories by id: 3=Current Debt, 4=Long-Term Debt, 5=Payroll Liabilities,
+  // 6=Payroll (Field), 7=Overhead, 9=Direct Job Costs.
+  const COST_CATEGORY_IDS = new Set([3, 4, 5, 6, 7, 9]);
+  const isCostCategory = COST_CATEGORY_IDS.has(cat.id);
 
   function changeColor(change: number): string {
     if (change === 0) return "text-gray-400";

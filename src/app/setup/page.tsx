@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import CategoryEditor from "@/components/setup/CategoryEditor";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -810,6 +811,18 @@ export default function SetupPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
+          <section>
+            <h2 className="text-base font-semibold text-gray-900 mb-4">Account Categorization</h2>
+            <CategoryEditor
+              accounts={accounts}
+              categories={categories}
+              onAccountUpdated={(u) =>
+                setAccounts((prev) =>
+                  prev.map((a) => (a.id === u.id ? { ...a, category_id: u.category_id } : a))
+                )
+              }
+            />
+          </section>
           <CategoriesSection categories={categories} onRefresh={fetchData} />
           <GlAccountsSection
             accounts={accounts}

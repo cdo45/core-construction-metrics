@@ -14,6 +14,7 @@ export interface ReportAccount {
 }
 
 export interface ReportCategory {
+  id: number;
   name: string;
   color: string;
   sort_order: number;
@@ -102,6 +103,7 @@ export async function GET(req: NextRequest) {
         wb.gl_account_id,
         g.account_no,
         g.description,
+        c.id         AS category_id,
         c.name       AS category_name,
         c.color      AS category_color,
         c.sort_order AS category_sort_order,
@@ -153,10 +155,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // ── 3. Build category groups ──────────────────────────────────────────────
+    // ── 3. Build category groups (keyed by category_id, with -1 for null) ────
+    const UNCATEGORIZED_ID = -1;
     const catMap = new Map<
-      string,
+      number,
       {
+        id: number;
         name: string;
         color: string;
         sort_order: number;
@@ -166,6 +170,8 @@ export async function GET(req: NextRequest) {
     >();
 
     for (const row of currentRows) {
+      const rawId = row.category_id;
+      const catId = rawId !== null && rawId !== undefined ? Number(rawId) : UNCATEGORIZED_ID;
       const catName = (row.category_name as string | null) ?? "Uncategorized";
       const catColor = (row.category_color as string | null) ?? "#6B7280";
       const catSort = row.category_sort_order !== null ? Number(row.category_sort_order) : 999;
@@ -175,8 +181,9 @@ export async function GET(req: NextRequest) {
       const change = end - beg;
       const change_pct = beg !== 0 ? (change / Math.abs(beg)) * 100 : 0;
 
-      if (!catMap.has(catName)) {
-        catMap.set(catName, {
+      if (!catMap.has(catId)) {
+        catMap.set(catId, {
+          id: catId,
           name: catName,
           color: catColor,
           sort_order: catSort,
@@ -187,8 +194,8 @@ export async function GET(req: NextRequest) {
 
       const prior = priorMap.get(glId);
       const priorEnd = prior ? prior.end : 0;
-      catMap.get(catName)!.prior_total += priorEnd;
-      catMap.get(catName)!.accounts.push({
+      catMap.get(catId)!.prior_total += priorEnd;
+      catMap.get(catId)!.accounts.push({
         gl_account_id: glId,
         account_no: Number(row.account_no),
         description: String(row.description),
@@ -207,9 +214,9 @@ export async function GET(req: NextRequest) {
         const change = current_total - prior_total;
         const change_pct =
           prior_total !== 0 ? (change / Math.abs(prior_total)) * 100 : 0;
-        // Sort accounts by absolute change descending
         cat.accounts.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
         return {
+          id: cat.id,
           name: cat.name,
           color: cat.color,
           sort_order: cat.sort_order,
@@ -221,25 +228,26 @@ export async function GET(req: NextRequest) {
         };
       });
 
-    // ── 4. Build ratios ───────────────────────────────────────────────────────
-    const catByName = (name: string) =>
-      categories.find((c) => c.name === name)?.current_total ?? 0;
-    const priorCatTotal = (name: string) =>
-      categories.find((c) => c.name === name)?.prior_total ?? 0;
+    // ── 4. Build ratios — lookup by category_id, not name ────────────────────
+    const CAT_ID = { CASH: 1, AR: 2, CURRENT_DEBT: 3, PAYROLL_LIAB: 5 };
+    const catById = (id: number) =>
+      categories.find((c) => c.id === id)?.current_total ?? 0;
+    const priorCatTotal = (id: number) =>
+      categories.find((c) => c.id === id)?.prior_total ?? 0;
 
-    const cash    = catByName("Cash on Hand");
-    const ar      = catByName("Who Owes Us");
-    const ap      = catByName("Who We Owe");
-    const payroll = catByName("Payroll Liabilities");
+    const cash    = catById(CAT_ID.CASH);
+    const ar      = catById(CAT_ID.AR);
+    const ap      = catById(CAT_ID.CURRENT_DEBT);
+    const payroll = catById(CAT_ID.PAYROLL_LIAB);
 
     const ratios = buildRatios(cash, ar, ap, payroll);
 
     let prior_ratios: ReportRatios | null = null;
     if (priorWeekEnding) {
-      const pCash    = priorCatTotal("Cash on Hand");
-      const pAR      = priorCatTotal("Who Owes Us");
-      const pAP      = priorCatTotal("Who We Owe");
-      const pPayroll = priorCatTotal("Payroll Liabilities");
+      const pCash    = priorCatTotal(CAT_ID.CASH);
+      const pAR      = priorCatTotal(CAT_ID.AR);
+      const pAP      = priorCatTotal(CAT_ID.CURRENT_DEBT);
+      const pPayroll = priorCatTotal(CAT_ID.PAYROLL_LIAB);
       prior_ratios = buildRatios(pCash, pAR, pAP, pPayroll);
     }
 
