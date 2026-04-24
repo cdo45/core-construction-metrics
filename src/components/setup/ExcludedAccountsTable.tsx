@@ -242,9 +242,12 @@ function ActivateModal({
     }
   }
 
-  const title = `Activate Account: ${acct.basic_account_no}${
-    acct.division ? " / " + acct.division : ""
-  } ${acct.description ? "— " + acct.description : ""}`;
+  // Spec format: "Account 5101 · Div 10 · DIRECT LABOR". Drop the "Div"
+  // segment entirely when division is empty/null rather than rendering
+  // "Div —".
+  const divPart = acct.division && acct.division.trim() !== "" ? ` · Div ${acct.division}` : "";
+  const descPart = acct.description ? ` · ${acct.description}` : "";
+  const title = `Activate Account ${acct.basic_account_no}${divPart}${descPart}`;
 
   return (
     <Modal title={title} onClose={onClose}>
@@ -450,7 +453,13 @@ export default function ExcludedAccountsTable({ onActivated, refreshKey }: Props
                 {rows.map((r) => (
                   <tr key={`${r.basic_account_no}|${r.division}`} className="hover:bg-gray-50 border-t border-gray-100">
                     <td className="table-td font-mono text-xs text-gray-700">{r.basic_account_no}</td>
-                    <td className="table-td font-mono text-xs text-gray-500">{r.division}</td>
+                    <td className="table-td font-mono text-xs">
+                      {r.division && r.division.trim() !== "" ? (
+                        <span className="text-gray-700">{r.division}</span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
                     <td className="table-td text-gray-800">{r.description || <span className="text-gray-400 italic">—</span>}</td>
                     <td className="table-td text-right tabular-nums">{r.tx_count}</td>
                     <td className="table-td text-right tabular-nums">{fmtMoney(r.total_dr)}</td>
