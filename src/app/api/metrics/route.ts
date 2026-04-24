@@ -112,11 +112,18 @@ export interface WeekMetric {
 
 export interface RunwaySummary {
   // 8-week rolling averages over active weeks only.
+  //
+  // Every avg_weekly_* field derives from per-week values that have ALREADY
+  // been summed across divisions in SQL — see the account_weekly CTE in the
+  // runway query. An account like 5101 that exists under divisions 10/20/99
+  // contributes a single summed pd per week, not three separate rows. This
+  // is what makes avg_weekly_payroll hit the real ~$100K/wk instead of a
+  // division-sliced fraction.
   avg_weekly_collections: number;
-  // avg_weekly_burn = 8-wk avg of (AP paid + OH paid) + THIS week's payroll.
-  // Payroll is a known weekly reality (not smoothed); AP/OH are bursty and
-  // benefit from the smoothing.
-  avg_weekly_burn: number;
+  avg_weekly_ap_paid: number;
+  avg_weekly_payroll: number;      // 8-wk smoothed payroll cash-out
+  avg_weekly_overhead: number;
+  avg_weekly_burn: number;         // ap + payroll + overhead (all smoothed)
   avg_weekly_revenue: number;
   collection_efficiency: number | null; // collections / revenue
   weeks_of_runway: number | null;       // current_cash / avg_weekly_burn
@@ -290,24 +297,37 @@ export async function GET(req: NextRequest) {
       ...ACCTS_CASH_COLLECTED,
       ...ACCTS_PAYROLL_PAID,
     ];
+    // Pre-aggregate by (account_no, week_ending) in an explicit CTE BEFORE
+    // any downstream averaging. Each gl_account row is (account_no, division)
+    // unique — an account like 5101 may have separate rows for division 10,
+    // 20, and 99. The CTE collapses those into a single per-week total so the
+    // JS rolling average sees ONE number per (account_no, week), not one per
+    // (account_no, division, week). Without this collapse, the 8-week payroll
+    // avg divides a divisional slice instead of the whole-company total, and
+    // the Weekly Burn card understates reality (bug: $17K/wk displayed vs
+    // $100K/wk actual).
     const acctRollups = await sql`
-      SELECT
-        wb.week_ending::text AS week_ending,
-        ga.account_no,
-        SUM(wb.end_balance)::numeric  AS end_sum,
-        SUM(wb.period_debit)::numeric  AS pd_sum,
-        SUM(wb.period_credit)::numeric AS pc_sum
-      FROM weekly_balances wb
-      JOIN gl_accounts ga ON ga.id = wb.gl_account_id
-      JOIN weeks w         ON w.week_ending = wb.week_ending
-      WHERE ga.is_active = true
-        AND (
-          ga.account_no = ANY(${runwayAccountList}::int[])
-          OR ga.account_no BETWEEN ${ACCT_PAYROLL_ACCRUALS_MIN} AND ${ACCT_PAYROLL_ACCRUALS_MAX}
-        )
-        AND (${fyFilter}::int  IS NULL OR w.fiscal_year = ${fyFilter}::int)
-        AND (${monthFilter}::text IS NULL OR TO_CHAR(w.week_ending, 'YYYY-MM') = ${monthFilter}::text)
-      GROUP BY wb.week_ending, ga.account_no
+      WITH account_weekly AS (
+        SELECT
+          wb.week_ending::text AS week_ending,
+          ga.account_no,
+          SUM(wb.end_balance)::numeric   AS end_sum,
+          SUM(wb.period_debit)::numeric  AS pd_sum,
+          SUM(wb.period_credit)::numeric AS pc_sum
+        FROM weekly_balances wb
+        JOIN gl_accounts ga ON ga.id = wb.gl_account_id
+        JOIN weeks w        ON w.week_ending = wb.week_ending
+        WHERE ga.is_active = true
+          AND (
+            ga.account_no = ANY(${runwayAccountList}::int[])
+            OR ga.account_no BETWEEN ${ACCT_PAYROLL_ACCRUALS_MIN} AND ${ACCT_PAYROLL_ACCRUALS_MAX}
+          )
+          AND (${fyFilter}::int  IS NULL OR w.fiscal_year = ${fyFilter}::int)
+          AND (${monthFilter}::text IS NULL OR TO_CHAR(w.week_ending, 'YYYY-MM') = ${monthFilter}::text)
+        GROUP BY wb.week_ending, ga.account_no
+      )
+      SELECT week_ending, account_no, end_sum, pd_sum, pc_sum
+      FROM account_weekly
     `;
 
     // Per-week per-account: { end, pd, pc } keyed by week_ending → account_no.
@@ -596,13 +616,17 @@ export async function GET(req: NextRequest) {
 
     const avg_weekly_collections = avgOver((w) => w.weekly_cash_collected);
     const avg_weekly_ap_paid     = avgOver((w) => w.weekly_ap_paid);
-    const avg_weekly_overhead_paid = avgOver((w) => w.weekly_overhead_paid);
+    const avg_weekly_payroll     = avgOver((w) => w.weekly_payroll_paid);
+    const avg_weekly_overhead    = avgOver((w) => w.weekly_overhead_paid);
     const avg_weekly_revenue     = avgOver((w) => w.weekly_revenue);
 
-    // Spec: payroll is NOT smoothed (weekly reality); AP+OH are smoothed.
-    const current_payroll_paid = anchor?.weekly_payroll_paid ?? 0;
+    // All three burn legs are 8-wk smoothed. The previous convention anchored
+    // payroll to the CURRENT week, which under-reported on off-cycle weeks
+    // (the bug behind "$17K/wk displayed vs $100K/wk actual"). Each per-week
+    // input here is already summed-across-divisions via the account_weekly
+    // CTE, so the avg reflects whole-company totals.
     const avg_weekly_burn =
-      avg_weekly_ap_paid + avg_weekly_overhead_paid + current_payroll_paid;
+      avg_weekly_ap_paid + avg_weekly_payroll + avg_weekly_overhead;
 
     const current_cash = anchor?.cat_1_cash ?? 0;
     const weeks_of_runway = avg_weekly_burn > 0 ? current_cash / avg_weekly_burn : null;
@@ -614,6 +638,9 @@ export async function GET(req: NextRequest) {
 
     const runway: RunwaySummary = {
       avg_weekly_collections,
+      avg_weekly_ap_paid,
+      avg_weekly_payroll,
+      avg_weekly_overhead,
       avg_weekly_burn,
       avg_weekly_revenue,
       collection_efficiency,

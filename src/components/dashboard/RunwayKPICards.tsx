@@ -103,7 +103,7 @@ export default function RunwayKPICards({ runway }: { runway: RunwaySummary | nul
         value={fmtMoneyShort(runway.avg_weekly_burn)}
         subtitle="8-wk avg"
         accent={COLORS.burn}
-        help="How fast cash is leaving per week. Adds current week's payroll + 8-week average of AP payments (bills paid to vendors) + 8-week average of overhead payments (rent, utilities, etc.). Payroll runs on a set weekly schedule so we use the actual number; AP and overhead land in lumps so we smooth them. Example: $450K/wk burn means cash drops about $450K every week with no collections."
+        help="How fast cash is leaving per week. Adds three 8-week averages: AP payments (bills paid to vendors) + payroll (labor + taxes + burden) + overhead (rent, utilities, etc.). Each is pre-summed across all divisions before averaging — a labor account that spans division 10, 20, and 99 contributes one whole-company weekly total to the average, not three slices. Example: $450K/wk burn means cash drops about $450K every week with no collections."
       />
       <RunwayCard
         label="Net Cash Flow"
