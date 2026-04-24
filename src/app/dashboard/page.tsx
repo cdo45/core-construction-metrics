@@ -340,6 +340,8 @@ function DashboardInner() {
             includeLoc={includeLoc}
             onIncludeLocChange={onIncludeLocChange}
             locUndrawn={data?.loc_undrawn}
+            trendSeries={data?.trend_series ?? null}
+            benchmarks={data?.benchmarks ?? null}
           />
         )}
 
@@ -364,6 +366,8 @@ function DashboardInner() {
               runway={data?.runway ?? null}
               includeLoc={includeLoc}
               locUndrawn={data?.loc_undrawn}
+              trendSeries={data?.trend_series ?? null}
+              benchmarks={data?.benchmarks ?? null}
             />
             <GrowthTargetSlider value={growthTarget} onCommit={setGrowthTarget} />
             <CashFlowTrendChart weeks={weeks} runway={data?.runway ?? null} />

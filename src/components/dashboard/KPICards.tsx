@@ -1,8 +1,14 @@
 "use client";
 
-import type { WeekMetric, PnlSummary } from "@/app/api/metrics/route";
+import type {
+  WeekMetric,
+  PnlSummary,
+  TrendSeries,
+  Benchmarks,
+} from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 import InfoTooltip from "@/components/ui/InfoTooltip";
+import Sparkline, { type SparklineFormat, type SparklinePoint } from "@/components/dashboard/Sparkline";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -68,6 +74,7 @@ export function KPICard({
   help,
   badge,
   extraLine,
+  sparkline,
 }: {
   label: string;
   value: string;
@@ -86,6 +93,8 @@ export function KPICard({
   /** Extra green sub-line rendered between value and subtitle. Used for
    *  the "+ $X,XXX,XXX undrawn LOC" hint under Cash on Hand. */
   extraLine?: string | null;
+  /** Optional Sparkline slot rendered to the right of the value. */
+  sparkline?: React.ReactNode;
 }) {
   let deltaColor = "text-gray-400";
   let ArrowIcon: React.ReactNode = null;
@@ -109,25 +118,38 @@ export function KPICard({
       ? "bg-blue-50 text-blue-700 border-blue-200"
       : "bg-green-50 text-green-700 border-green-200";
 
+  // Card layout adapts to viewport:
+  //   ≥ sm (640px): value + sparkline on one row, sparkline right-aligned.
+  //   < sm:         stack vertically (value on top, sparkline below).
+  // min-w prevents the sparkline from squishing the value at the breakpoint
+  // edge.
+  const valueRowLayout = sparkline
+    ? "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2"
+    : "flex items-center";
+  const cardMinWidth = sparkline ? "min-w-[240px]" : "";
+
   return (
     <div
-      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate flex items-center gap-1">
         <span className="truncate">{label}</span>
         {help && <InfoTooltip text={help} />}
       </p>
-      <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight flex items-baseline gap-2">
-        <span>{value}</span>
-        {badge && (
-          <span
-            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${badgeCls}`}
-          >
-            {badge.label}
-          </span>
-        )}
-      </p>
+      <div className={valueRowLayout}>
+        <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight flex items-baseline gap-2 min-w-0">
+          <span className="truncate">{value}</span>
+          {badge && (
+            <span
+              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${badgeCls} whitespace-nowrap`}
+            >
+              {badge.label}
+            </span>
+          )}
+        </p>
+        {sparkline && <div className="flex-shrink-0">{sparkline}</div>}
+      </div>
       {extraLine && (
         <p className="text-xs text-green-700 font-medium truncate">{extraLine}</p>
       )}
@@ -171,12 +193,24 @@ const COLORS = {
   opMargin:  "#5D3A9B",
 };
 
+// Rolling mean of the `.value` field — used for the dotted reference line
+// on $ and % sparklines. Returns 0 for empty arrays so the Sparkline
+// component can render a flat ref line when there's only one point.
+function seriesAvg(points: Array<{ value: number }> | undefined): number {
+  if (!points || points.length === 0) return 0;
+  let s = 0;
+  for (const p of points) s += p.value;
+  return s / points.length;
+}
+
 export default function KPICards({
   weeks,
   pnl,
   includeLoc,
   onIncludeLocChange,
   locUndrawn,
+  trendSeries,
+  benchmarks,
 }: {
   weeks: WeekMetric[];
   /** Window-level P&L totals; when provided, the P&L row shows
@@ -192,6 +226,10 @@ export default function KPICards({
   /** $ amount of unused LOC capacity. Folded into cash-based metrics
    *  when includeLoc is true. */
   locUndrawn?: number;
+  /** Per-metric time-series for inline sparklines. */
+  trendSeries?: TrendSeries | null;
+  /** Industry benchmark reference values for ratio / weeks metrics. */
+  benchmarks?: Benchmarks | null;
 }) {
   if (weeks.length === 0) return <KPISkeleton />;
 
@@ -236,6 +274,44 @@ export default function KPICards({
       ? `+ ${fmtMoneyShort(locUndrawn)} undrawn LOC`
       : null;
 
+  // ─── Sparkline helpers ──────────────────────────────────────────────────
+  // `spark(...)` builds a Sparkline node for a given TrendSeries key with
+  // the right format + reference line + colour. Returns undefined when no
+  // trendSeries is loaded (skeleton), so <KPICard> falls back gracefully.
+  function spark(
+    key: keyof TrendSeries,
+    opts: {
+      format: SparklineFormat;
+      color: string;
+      /** "avg" → rolling mean of the series. "benchmark" → corresponding
+       *  Benchmarks entry. undefined → no reference line. */
+      reference?: "avg" | "benchmark" | undefined;
+      benchmarkKey?: keyof Benchmarks;
+    },
+  ): React.ReactNode {
+    if (!trendSeries) return null;
+    const data = trendSeries[key];
+    if (!data || data.length === 0) return null;
+    let referenceValue: number | undefined;
+    let referenceLabel: string | undefined;
+    if (opts.reference === "avg") {
+      referenceValue = seriesAvg(data);
+      referenceLabel = "avg";
+    } else if (opts.reference === "benchmark" && benchmarks && opts.benchmarkKey) {
+      referenceValue = benchmarks[opts.benchmarkKey];
+      referenceLabel = "healthy";
+    }
+    return (
+      <Sparkline
+        data={data.map((p) => ({ label: p.period_label, value: p.value }))}
+        format={opts.format}
+        color={opts.color}
+        referenceValue={referenceValue}
+        referenceLabel={referenceLabel}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {/* LOC toggle. Shown even when parent didn't wire onIncludeLocChange
@@ -275,6 +351,7 @@ export default function KPICards({
           subtitle="Across all bank accounts"
           accent={COLORS.cash}
           extraLine={undrawnExtra}
+          sparkline={spark("cash", { format: "money", color: COLORS.cash, reference: "avg" })}
         />
         <KPICard
           label="Net Liquidity"
@@ -283,6 +360,7 @@ export default function KPICards({
           subtitle="Cash − AP − Payroll Accruals"
           accent={COLORS.netLiq}
           badge={locBadge}
+          sparkline={spark("net_liquidity", { format: "money", color: COLORS.netLiq, reference: "avg" })}
         />
         <KPICard
           label="Cash Coverage"
@@ -290,6 +368,7 @@ export default function KPICards({
           subtitle="Weeks of AP covered by Cash"
           accent={COLORS.runway}
           badge={locBadge}
+          sparkline={spark("cash_coverage_weeks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "cash_coverage_weeks" })}
         />
       </SectionRow>
 
@@ -300,6 +379,7 @@ export default function KPICards({
           delta={latest.ar_change}
           subtitle="Total AR"
           accent={COLORS.ar}
+          sparkline={spark("ar", { format: "money", color: COLORS.ar, reference: "avg" })}
         />
         <KPICard
           label="AP"
@@ -307,6 +387,7 @@ export default function KPICards({
           subtitle="Account 2005 A/P Trade"
           accent={COLORS.debt}
           inverseDelta={true}
+          sparkline={spark("ap", { format: "money", color: COLORS.debt, reference: "avg" })}
         />
         <KPICard
           label="Payroll Runway"
@@ -314,6 +395,7 @@ export default function KPICards({
           subtitle="Weeks of Payroll covered by Cash"
           accent={COLORS.runway}
           badge={locBadge}
+          sparkline={spark("payroll_runway_wks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "payroll_runway_wks" })}
         />
       </SectionRow>
 
@@ -324,6 +406,7 @@ export default function KPICards({
           subtitle="(Cash + AR) ÷ (AP + Payroll Accruals)"
           accent={COLORS.ratio}
           badge={locBadge}
+          sparkline={spark("current_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "current_ratio" })}
         />
         <KPICard
           label="Quick Ratio"
@@ -331,12 +414,14 @@ export default function KPICards({
           subtitle="Cash ÷ (AP + Payroll Accruals)"
           accent={COLORS.ratio}
           badge={locBadge}
+          sparkline={spark("quick_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "quick_ratio" })}
         />
         <KPICard
           label="AR to AP"
           value={fmtRatio(latest.ar_to_ap)}
           subtitle="AR ÷ AP"
           accent={COLORS.ratio}
+          sparkline={spark("ar_to_ap", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "ar_to_ap" })}
         />
       </SectionRow>
 
@@ -346,12 +431,14 @@ export default function KPICards({
           value={fmtMoneyShort(pnl?.revenue ?? 0)}
           subtitle="Period activity in view"
           accent={COLORS.revenue}
+          sparkline={spark("revenue", { format: "money", color: COLORS.revenue, reference: "avg" })}
         />
         <KPICard
           label="Gross Margin %"
           value={fmtPct(pnl?.gross_margin_pct)}
           subtitle="(Revenue − DJC) ÷ Revenue"
           accent={COLORS.margin}
+          sparkline={spark("gross_margin_pct", { format: "pct", color: COLORS.margin, reference: "avg" })}
         />
         <KPICard
           label="Operating Margin %"
@@ -359,6 +446,7 @@ export default function KPICards({
           subtitle="Accrual basis — see P&L for cash split"
           accent={COLORS.opMargin}
           help="Accrual basis includes non-cash expenses like depreciation. See P&L Breakdown for cash-only view."
+          sparkline={spark("operating_margin_pct", { format: "pct", color: COLORS.opMargin, reference: "avg" })}
         />
       </SectionRow>
     </div>
