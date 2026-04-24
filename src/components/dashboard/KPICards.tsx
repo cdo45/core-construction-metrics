@@ -1,14 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import type {
   WeekMetric,
   PnlSummary,
   TrendSeries,
   Benchmarks,
+  DrilldownMap,
 } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 import Sparkline, { type SparklineFormat, type SparklinePoint } from "@/components/dashboard/Sparkline";
+import KpiDrilldownModal from "@/components/dashboard/KpiDrilldownModal";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -75,6 +78,7 @@ export function KPICard({
   badge,
   extraLine,
   sparkline,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -95,6 +99,10 @@ export function KPICard({
   extraLine?: string | null;
   /** Optional Sparkline slot rendered to the right of the value. */
   sparkline?: React.ReactNode;
+  /** When provided, the card becomes click-to-drilldown — adds
+   *  cursor-pointer, hover bg lightening, and keyboard activation. The
+   *  parent owns the modal; the card just opens it. */
+  onClick?: () => void;
 }) {
   let deltaColor = "text-gray-400";
   let ArrowIcon: React.ReactNode = null;
@@ -128,9 +136,27 @@ export function KPICard({
     : "flex items-center";
   const cardMinWidth = sparkline ? "min-w-[240px]" : "";
 
+  const interactiveCls = onClick
+    ? "cursor-pointer hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1B2A4A]/30 transition-colors"
+    : "";
+
   return (
     <div
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${label} — show formula` : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth} ${interactiveCls}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate flex items-center gap-1">
@@ -211,6 +237,7 @@ export default function KPICards({
   locUndrawn,
   trendSeries,
   benchmarks,
+  drilldowns,
 }: {
   weeks: WeekMetric[];
   /** Window-level P&L totals; when provided, the P&L row shows
@@ -230,7 +257,14 @@ export default function KPICards({
   trendSeries?: TrendSeries | null;
   /** Industry benchmark reference values for ratio / weeks metrics. */
   benchmarks?: Benchmarks | null;
+  /** Click-to-expand backing data, keyed by metric_key (e.g. "cash",
+   *  "current_ratio"). When provided, every card with a matching entry
+   *  becomes click-to-drilldown. */
+  drilldowns?: DrilldownMap | null;
 }) {
+  const [activeDrilldown, setActiveDrilldown] =
+    useState<{ key: string; title: string; subtitle?: string } | null>(null);
+
   if (weeks.length === 0) return <KPISkeleton />;
 
   // Anchor on the last week WITH ACTIVITY — zero-activity future weeks are
@@ -273,6 +307,16 @@ export default function KPICards({
     includeLoc && (locUndrawn ?? 0) > 0
       ? `+ ${fmtMoneyShort(locUndrawn)} undrawn LOC`
       : null;
+
+  // ─── Drilldown wiring ───────────────────────────────────────────────────
+  // bind(...) returns an onClick handler that opens the drilldown modal for
+  // the given metric_key. Returns undefined if the API hasn't surfaced a
+  // drilldown for that key — prevents the card from showing as clickable
+  // before the data loads.
+  function bind(key: string, title: string, subtitle?: string): (() => void) | undefined {
+    if (!drilldowns || !drilldowns[key]) return undefined;
+    return () => setActiveDrilldown({ key, title, subtitle });
+  }
 
   // ─── Sparkline helpers ──────────────────────────────────────────────────
   // `spark(...)` builds a Sparkline node for a given TrendSeries key with
@@ -352,6 +396,7 @@ export default function KPICards({
           accent={COLORS.cash}
           extraLine={undrawnExtra}
           sparkline={spark("cash", { format: "money", color: COLORS.cash, reference: "avg" })}
+          onClick={bind("cash", "Cash on Hand", "Across all bank accounts")}
         />
         <KPICard
           label="Net Liquidity"
@@ -361,6 +406,7 @@ export default function KPICards({
           accent={COLORS.netLiq}
           badge={locBadge}
           sparkline={spark("net_liquidity", { format: "money", color: COLORS.netLiq, reference: "avg" })}
+          onClick={bind("net_liquidity", "Net Liquidity", "Cash − AP − Payroll Accruals")}
         />
         <KPICard
           label="Cash Coverage"
@@ -369,6 +415,7 @@ export default function KPICards({
           accent={COLORS.runway}
           badge={locBadge}
           sparkline={spark("cash_coverage_weeks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "cash_coverage_weeks" })}
+          onClick={bind("cash_coverage_weeks", "Cash Coverage", "Weeks of AP covered by Cash")}
         />
       </SectionRow>
 
@@ -380,6 +427,7 @@ export default function KPICards({
           subtitle="Total AR"
           accent={COLORS.ar}
           sparkline={spark("ar", { format: "money", color: COLORS.ar, reference: "avg" })}
+          onClick={bind("ar", "What We're Owed", "Total AR")}
         />
         <KPICard
           label="AP"
@@ -388,6 +436,7 @@ export default function KPICards({
           accent={COLORS.debt}
           inverseDelta={true}
           sparkline={spark("ap", { format: "money", color: COLORS.debt, reference: "avg" })}
+          onClick={bind("ap", "AP", "Account 2005 A/P Trade")}
         />
         <KPICard
           label="Payroll Runway"
@@ -396,6 +445,7 @@ export default function KPICards({
           accent={COLORS.runway}
           badge={locBadge}
           sparkline={spark("payroll_runway_wks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "payroll_runway_wks" })}
+          onClick={bind("payroll_runway_wks", "Payroll Runway", "Weeks of Payroll covered by Cash")}
         />
       </SectionRow>
 
@@ -407,6 +457,7 @@ export default function KPICards({
           accent={COLORS.ratio}
           badge={locBadge}
           sparkline={spark("current_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "current_ratio" })}
+          onClick={bind("current_ratio", "Current Ratio", "(Cash + AR) ÷ (AP + Payroll Accruals)")}
         />
         <KPICard
           label="Quick Ratio"
@@ -415,6 +466,7 @@ export default function KPICards({
           accent={COLORS.ratio}
           badge={locBadge}
           sparkline={spark("quick_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "quick_ratio" })}
+          onClick={bind("quick_ratio", "Quick Ratio", "Cash ÷ (AP + Payroll Accruals)")}
         />
         <KPICard
           label="AR to AP"
@@ -422,6 +474,7 @@ export default function KPICards({
           subtitle="AR ÷ AP"
           accent={COLORS.ratio}
           sparkline={spark("ar_to_ap", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "ar_to_ap" })}
+          onClick={bind("ar_to_ap", "AR to AP", "AR ÷ AP")}
         />
       </SectionRow>
 
@@ -432,6 +485,7 @@ export default function KPICards({
           subtitle="Period activity in view"
           accent={COLORS.revenue}
           sparkline={spark("revenue", { format: "money", color: COLORS.revenue, reference: "avg" })}
+          onClick={bind("revenue", "Revenue", "Period activity in view")}
         />
         <KPICard
           label="Gross Margin %"
@@ -439,6 +493,7 @@ export default function KPICards({
           subtitle="(Revenue − DJC) ÷ Revenue"
           accent={COLORS.margin}
           sparkline={spark("gross_margin_pct", { format: "pct", color: COLORS.margin, reference: "avg" })}
+          onClick={bind("gross_margin_pct", "Gross Margin %", "(Revenue − DJC) ÷ Revenue")}
         />
         <KPICard
           label="Operating Margin %"
@@ -447,8 +502,17 @@ export default function KPICards({
           accent={COLORS.opMargin}
           help="Accrual basis includes non-cash expenses like depreciation. See P&L Breakdown for cash-only view."
           sparkline={spark("operating_margin_pct", { format: "pct", color: COLORS.opMargin, reference: "avg" })}
+          onClick={bind("operating_margin_pct", "Operating Margin %", "Accrual basis — see P&L for cash split")}
         />
       </SectionRow>
+
+      <KpiDrilldownModal
+        isOpen={activeDrilldown !== null}
+        onClose={() => setActiveDrilldown(null)}
+        title={activeDrilldown?.title ?? ""}
+        subtitle={activeDrilldown?.subtitle}
+        drilldown={activeDrilldown && drilldowns ? drilldowns[activeDrilldown.key] : null}
+      />
     </div>
   );
 }

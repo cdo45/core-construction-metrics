@@ -342,6 +342,7 @@ function DashboardInner() {
             locUndrawn={data?.loc_undrawn}
             trendSeries={data?.trend_series ?? null}
             benchmarks={data?.benchmarks ?? null}
+            drilldowns={data?.drilldowns ?? null}
           />
         )}
 
@@ -368,6 +369,7 @@ function DashboardInner() {
               locUndrawn={data?.loc_undrawn}
               trendSeries={data?.trend_series ?? null}
               benchmarks={data?.benchmarks ?? null}
+              drilldowns={data?.drilldowns ?? null}
             />
             <GrowthTargetSlider value={growthTarget} onCommit={setGrowthTarget} />
             <CashFlowTrendChart weeks={weeks} runway={data?.runway ?? null} />

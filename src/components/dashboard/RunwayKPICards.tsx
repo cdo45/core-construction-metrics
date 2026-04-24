@@ -1,8 +1,10 @@
 "use client";
 
-import type { RunwaySummary, TrendSeries, Benchmarks } from "@/app/api/metrics/route";
+import { useState } from "react";
+import type { RunwaySummary, TrendSeries, Benchmarks, DrilldownMap } from "@/app/api/metrics/route";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 import Sparkline, { type SparklineFormat } from "@/components/dashboard/Sparkline";
+import KpiDrilldownModal from "@/components/dashboard/KpiDrilldownModal";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -31,6 +33,7 @@ function RunwayCard({
   valueColor,
   badge,
   sparkline,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -44,6 +47,9 @@ function RunwayCard({
   badge?: { label: string } | null;
   /** Optional Sparkline node rendered next to the value. */
   sparkline?: React.ReactNode;
+  /** When provided, the card becomes click-to-drilldown — adds
+   *  cursor-pointer, hover bg lightening, and keyboard activation. */
+  onClick?: () => void;
 }) {
   // Same responsive layout rules as KPICard — prevent the sparkline from
   // collapsing the value at the sm breakpoint edge; stack vertically
@@ -53,9 +59,27 @@ function RunwayCard({
     : "flex items-center";
   const cardMinWidth = sparkline ? "min-w-[240px]" : "";
 
+  const interactiveCls = onClick
+    ? "cursor-pointer hover:bg-gray-50 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1B2A4A]/30 transition-colors"
+    : "";
+
   return (
     <div
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${label} — show formula` : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth} ${interactiveCls}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <div className="flex items-center gap-1.5">
@@ -106,6 +130,7 @@ export default function RunwayKPICards({
   locUndrawn,
   trendSeries,
   benchmarks,
+  drilldowns,
 }: {
   runway: RunwaySummary | null;
   /** When true, Weeks of Runway uses (cash + undrawn LOC) / burn. Owned
@@ -116,7 +141,13 @@ export default function RunwayKPICards({
    *  populated alongside the other metrics in /api/metrics. */
   trendSeries?: TrendSeries | null;
   benchmarks?: Benchmarks | null;
+  /** Click-to-expand backing data, keyed by metric_key. When provided,
+   *  every runway card with a matching entry becomes click-to-drilldown. */
+  drilldowns?: DrilldownMap | null;
 }) {
+  const [activeDrilldown, setActiveDrilldown] =
+    useState<{ key: string; title: string; subtitle?: string } | null>(null);
+
   if (!runway) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -146,6 +177,14 @@ export default function RunwayKPICards({
       ? (runway.current_cash + locAmount) / runway.avg_weekly_burn
       : runway.weeks_of_runway;
   const runwayBadge = includeLoc ? { label: "+LOC" } : null;
+
+  // bind(...) returns an onClick handler that opens the drilldown modal
+  // for the given metric_key. Returns undefined if the API hasn't surfaced
+  // a drilldown for that key.
+  function bind(key: string, title: string, subtitle?: string): (() => void) | undefined {
+    if (!drilldowns || !drilldowns[key]) return undefined;
+    return () => setActiveDrilldown({ key, title, subtitle });
+  }
 
   // Sparkline helper — mirrors the one in KPICards. Returns null when the
   // trend_series isn't loaded yet so RunwayCard renders without the spark.
@@ -190,6 +229,7 @@ export default function RunwayKPICards({
         accent={COLORS.collections}
         help="Average cash landing in operating accounts per week. Calculated from deposits to 1021/1027/1120 over the last 8 active weeks."
         sparkline={spark("weekly_collections", { format: "money", color: COLORS.collections, reference: "avg" })}
+        onClick={bind("avg_weekly_collections", "Weekly Collections", "8-week average of bank deposits")}
       />
       <RunwayCard
         label="Weekly Burn"
@@ -198,6 +238,7 @@ export default function RunwayKPICards({
         accent={COLORS.burn}
         help="How fast cash is leaving per week. Adds three 8-week averages: AP payments (bills paid to vendors) + payroll (labor + taxes + burden) + overhead (rent, utilities, etc.). Each is pre-summed across all divisions before averaging — a labor account that spans division 10, 20, and 99 contributes one whole-company weekly total to the average, not three slices. Example: $450K/wk burn means cash drops about $450K every week with no collections."
         sparkline={spark("weekly_burn", { format: "money", color: COLORS.burn, reference: "avg" })}
+        onClick={bind("avg_weekly_burn", "Weekly Burn", "8-week average of cash leaving the business")}
       />
       <RunwayCard
         label="Net Cash Flow"
@@ -207,6 +248,7 @@ export default function RunwayKPICards({
         valueColor={netColor}
         help="Collections minus burn. Positive = building cash. Negative = draining cash."
         sparkline={spark("net_cash_flow", { format: "money", color: COLORS.net, reference: "avg" })}
+        onClick={bind("net_cash_flow", "Net Cash Flow", "Collections − Burn")}
       />
       <RunwayCard
         label="Weeks of Runway"
@@ -216,6 +258,7 @@ export default function RunwayKPICards({
         badge={runwayBadge}
         help="Worst case: if collections stopped tomorrow, how many weeks of cash until you're out. Current cash ÷ weekly burn. Example: $2M cash ÷ $500K/wk burn = 4 weeks. Reality is better because you'll keep collecting — this is the floor."
         sparkline={spark("weeks_of_runway", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "weeks_of_runway" })}
+        onClick={bind("weeks_of_runway", "Weeks of Runway", "Current cash ÷ weekly burn")}
       />
       <RunwayCard
         label="Coast Number"
@@ -224,6 +267,7 @@ export default function RunwayKPICards({
         accent={COLORS.coast}
         help="The weekly collection target to stay cash-flat. Equal to weekly burn. If you collect this much each week, cash stays where it is. Less → cash shrinks; more → cash grows. Example: $450K/wk burn means you need to collect $450K/wk to coast."
         sparkline={spark("coast_weekly", { format: "money", color: COLORS.coast, reference: "avg" })}
+        onClick={bind("coast_weekly", "Coast Number", "Weekly collections needed to stay flat")}
       />
       <RunwayCard
         label="Grow Number"
@@ -232,6 +276,14 @@ export default function RunwayKPICards({
         accent={COLORS.grow}
         help={`Weekly collection target to fund a ${growthPctLabel} revenue bump. Takes the coast number (break-even) and adds ${growthPctLabel} of average weekly revenue on top. Example at 10%: if weekly burn is $450K and weekly revenue averages $600K, grow number = $450K + ($60K) = $510K/wk. Adjust the target with the slider.`}
         sparkline={spark("grow_weekly", { format: "money", color: COLORS.grow, reference: "avg" })}
+        onClick={bind("grow_weekly", "Grow Number", `At ${growthPctLabel} growth target`)}
+      />
+      <KpiDrilldownModal
+        isOpen={activeDrilldown !== null}
+        onClose={() => setActiveDrilldown(null)}
+        title={activeDrilldown?.title ?? ""}
+        subtitle={activeDrilldown?.subtitle}
+        drilldown={activeDrilldown && drilldowns ? drilldowns[activeDrilldown.key] : null}
       />
     </div>
   );
