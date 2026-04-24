@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
       SELECT
         g.id,
         g.account_no,
+        g.division,
         g.description,
         g.normal_balance,
         g.category_id,
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest) {
       ) latest ON true
       WHERE (${catFilterArr}::int[] IS NULL OR g.category_id = ANY(${catFilterArr}::int[]))
       GROUP BY g.id, c.name, c.color, tx.tx_count, tx.week_count, latest.end_balance
-      ORDER BY g.account_no ASC
+      ORDER BY g.account_no ASC, g.division ASC
     `;
     return NextResponse.json(accounts);
   } catch (err) {

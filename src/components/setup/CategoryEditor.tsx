@@ -103,9 +103,11 @@ function ExcludeModal({
     }
   }
 
-  const title = `Exclude ${acct.account_no}${acct.division ? " / " + acct.division : ""}${
-    acct.description ? " — " + acct.description : ""
-  }?`;
+  // Spec format: "Account 5101 · Div 10 · DIRECT LABOR". Null/empty division
+  // drops the "Div" segment entirely rather than showing "Div —".
+  const divPart = acct.division ? ` · Div ${acct.division}` : "";
+  const descPart = acct.description ? ` · ${acct.description}` : "";
+  const title = `Exclude Account ${acct.account_no}${divPart}${descPart}?`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -373,7 +375,13 @@ export default function CategoryEditor({
               filtered.map((acc) => (
                 <tr key={acc.id} className="hover:bg-gray-50 border-t border-gray-100">
                   <td className="table-td font-mono text-xs text-gray-600">{acc.account_no}</td>
-                  <td className="table-td font-mono text-xs text-gray-500">{acc.division ?? ""}</td>
+                  <td className="table-td font-mono text-xs">
+                    {acc.division && acc.division.trim() !== "" ? (
+                      <span className="text-gray-700">{acc.division}</span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
                   <td className="table-td text-gray-800">{acc.description}</td>
                   <td className="table-td">
                     <div className="flex items-center gap-2">
