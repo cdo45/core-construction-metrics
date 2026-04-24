@@ -25,6 +25,9 @@ export interface EditorAccount {
   normal_balance: "debit" | "credit";
   category_id: number | null;
   is_active: boolean;
+  /** Depreciation / internal allocation flag. When true the account rolls
+   *  into the non-cash subgroup on the P&L breakdown. */
+  is_non_cash?: boolean;
   tx_count?: number;
   tx_week_count?: number;
 }
@@ -272,6 +275,28 @@ export default function CategoryEditor({
     }
   }
 
+  async function saveNonCash(acc: EditorAccount, next: boolean) {
+    // Optimistic update — flip locally first, roll back on failure. Keeps
+    // the checkbox snappy on the row even if the API round-trip is slow.
+    setSavingId(acc.id);
+    onAccountUpdated({ ...acc, is_non_cash: next });
+    try {
+      const res = await fetch(`/api/gl-accounts/${acc.id}/noncash`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_non_cash: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+    } catch (e) {
+      // Roll back
+      onAccountUpdated({ ...acc, is_non_cash: !next });
+      setToast({ msg: `Failed to update non-cash on ${acc.account_no}: ${e instanceof Error ? e.message : String(e)}`, kind: "err", n: Date.now() });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   function handleExcluded(msg: string) {
     setToast({ msg, kind: "ok", n: Date.now() });
     onAccountExcluded?.();
@@ -372,13 +397,14 @@ export default function CategoryEditor({
 
       {/* Table */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
-        <table className="w-full min-w-[780px] text-sm">
+        <table className="w-full min-w-[860px] text-sm">
           <thead className="bg-gray-50 sticky top-0">
             <tr>
               <SortableHeader<EditorAccount> label="Account #"  column="account_no"     sortState={sortState} onSort={sortBy} className="w-24" />
               <SortableHeader<EditorAccount> label="Div"        column="division"       sortState={sortState} onSort={sortBy} className="w-20" />
               <SortableHeader<EditorAccount> label="Description" column="description"    sortState={sortState} onSort={sortBy} />
               <SortableHeader<EditorAccount> label="Category"   column="category_id"    sortState={sortState} onSort={sortBy} className="w-56" />
+              <SortableHeader<EditorAccount> label="Non-Cash"   column="is_non_cash"    sortState={sortState} onSort={sortBy} className="w-24" align="center" />
               <SortableHeader<EditorAccount> label="Normal"     column="normal_balance" sortState={sortState} onSort={sortBy} className="w-20" />
               <th className="table-th w-20 text-center">Exclude</th>
             </tr>
@@ -386,7 +412,7 @@ export default function CategoryEditor({
           <tbody>
             {sortedFiltered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400 italic">
+                <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400 italic">
                   No accounts match.
                 </td>
               </tr>
@@ -430,6 +456,16 @@ export default function CategoryEditor({
                         </svg>
                       )}
                     </div>
+                  </td>
+                  <td className="table-td text-center">
+                    <input
+                      type="checkbox"
+                      aria-label={`Flag account ${acc.account_no} as non-cash`}
+                      checked={Boolean(acc.is_non_cash)}
+                      disabled={savingId === acc.id}
+                      onChange={(e) => saveNonCash(acc, e.target.checked)}
+                      className="h-4 w-4 cursor-pointer accent-[#1B2A4A]"
+                    />
                   </td>
                   <td className="table-td text-xs text-gray-500 uppercase">{acc.normal_balance}</td>
                   <td className="table-td text-center">
