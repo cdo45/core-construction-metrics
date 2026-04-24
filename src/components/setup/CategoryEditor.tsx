@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, ChevronDown, X } from "lucide-react";
+import { useTableSort, type SortSpec } from "@/hooks/useTableSort";
+import SortableHeader from "@/components/ui/SortableHeader";
 
 const LS_KEY = "setup_category_editor_collapsed";
+const SORT_STORAGE_KEY = "tablesort:CategoryEditor";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -231,6 +234,22 @@ export default function CategoryEditor({
     });
   }, [activeAccounts, filter, catFilter]);
 
+  // Default sort: account_no ASC, then division ASC (NULLS FIRST via the
+  // hook's comparator). User-initiated sorts cycle ASC → DESC → default.
+  const defaultSort = useMemo<SortSpec<EditorAccount>>(
+    () => ({
+      column: "account_no",
+      direction: "asc",
+      secondary: [{ column: "division", direction: "asc" }],
+    }),
+    [],
+  );
+  const { sortedData: sortedFiltered, sortBy, sortState } = useTableSort(
+    filtered,
+    defaultSort,
+    SORT_STORAGE_KEY,
+  );
+
   async function saveCategory(acc: EditorAccount, newCatId: number | null) {
     setSavingId(acc.id);
     try {
@@ -356,23 +375,23 @@ export default function CategoryEditor({
         <table className="w-full min-w-[780px] text-sm">
           <thead className="bg-gray-50 sticky top-0">
             <tr>
-              <th className="table-th w-24">Account #</th>
-              <th className="table-th w-20">Div</th>
-              <th className="table-th">Description</th>
-              <th className="table-th w-56">Category</th>
-              <th className="table-th w-20">Normal</th>
+              <SortableHeader<EditorAccount> label="Account #"  column="account_no"     sortState={sortState} onSort={sortBy} className="w-24" />
+              <SortableHeader<EditorAccount> label="Div"        column="division"       sortState={sortState} onSort={sortBy} className="w-20" />
+              <SortableHeader<EditorAccount> label="Description" column="description"    sortState={sortState} onSort={sortBy} />
+              <SortableHeader<EditorAccount> label="Category"   column="category_id"    sortState={sortState} onSort={sortBy} className="w-56" />
+              <SortableHeader<EditorAccount> label="Normal"     column="normal_balance" sortState={sortState} onSort={sortBy} className="w-20" />
               <th className="table-th w-20 text-center">Exclude</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {sortedFiltered.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400 italic">
                   No accounts match.
                 </td>
               </tr>
             ) : (
-              filtered.map((acc) => (
+              sortedFiltered.map((acc) => (
                 <tr key={acc.id} className="hover:bg-gray-50 border-t border-gray-100">
                   <td className="table-td font-mono text-xs text-gray-600">{acc.account_no}</td>
                   <td className="table-td font-mono text-xs">

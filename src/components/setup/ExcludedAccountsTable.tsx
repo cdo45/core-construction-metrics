@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
+import { useTableSort, type SortSpec } from "@/hooks/useTableSort";
+import SortableHeader from "@/components/ui/SortableHeader";
 
 const LS_KEY = "setup_excluded_collapsed";
+const SORT_STORAGE_KEY = "tablesort:ExcludedAccountsTable";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -380,6 +383,23 @@ export default function ExcludedAccountsTable({ onActivated, refreshKey }: Props
     onActivated?.();
   }
 
+  // Default sort: basic_account_no ASC → division ASC. basic_account_no is
+  // a string on the wire; the hook's natural-sort comparator orders "1005"
+  // < "1021" < "2005" correctly.
+  const defaultSort = useMemo<SortSpec<ExcludedAccount>>(
+    () => ({
+      column: "basic_account_no",
+      direction: "asc",
+      secondary: [{ column: "division", direction: "asc" }],
+    }),
+    [],
+  );
+  const { sortedData: sortedRows, sortBy, sortState } = useTableSort(
+    rows,
+    defaultSort,
+    SORT_STORAGE_KEY,
+  );
+
   if (loading) {
     return (
       <div className="card">
@@ -436,21 +456,21 @@ export default function ExcludedAccountsTable({ onActivated, refreshKey }: Props
             <table className="w-full min-w-[960px] text-sm">
               <thead>
                 <tr>
-                  <th className="table-th w-24">Account #</th>
-                  <th className="table-th w-16">Div</th>
-                  <th className="table-th">Description</th>
-                  <th className="table-th w-16 text-right">Tx</th>
-                  <th className="table-th w-28 text-right">Total DR</th>
-                  <th className="table-th w-28 text-right">Total CR</th>
-                  <th className="table-th w-28">First Seen</th>
-                  <th className="table-th w-28">Last Seen</th>
-                  <th className="table-th w-16 text-right">Weeks</th>
+                  <SortableHeader<ExcludedAccount> label="Account #"  column="basic_account_no" sortState={sortState} onSort={sortBy} className="w-24" />
+                  <SortableHeader<ExcludedAccount> label="Div"        column="division"         sortState={sortState} onSort={sortBy} className="w-16" />
+                  <SortableHeader<ExcludedAccount> label="Description" column="description"      sortState={sortState} onSort={sortBy} />
+                  <SortableHeader<ExcludedAccount> label="Tx"         column="tx_count"         sortState={sortState} onSort={sortBy} className="w-16" align="right" />
+                  <SortableHeader<ExcludedAccount> label="Total DR"   column="total_dr"         sortState={sortState} onSort={sortBy} className="w-28" align="right" />
+                  <SortableHeader<ExcludedAccount> label="Total CR"   column="total_cr"         sortState={sortState} onSort={sortBy} className="w-28" align="right" />
+                  <SortableHeader<ExcludedAccount> label="First Seen" column="first_seen"       sortState={sortState} onSort={sortBy} className="w-28" />
+                  <SortableHeader<ExcludedAccount> label="Last Seen"  column="last_seen"        sortState={sortState} onSort={sortBy} className="w-28" />
+                  <SortableHeader<ExcludedAccount> label="Weeks"      column="weeks_affected"   sortState={sortState} onSort={sortBy} className="w-16" align="right" />
                   <th className="table-th">Sources</th>
                   <th className="table-th w-28 text-center">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {sortedRows.map((r) => (
                   <tr key={`${r.basic_account_no}|${r.division}`} className="hover:bg-gray-50 border-t border-gray-100">
                     <td className="table-td font-mono text-xs text-gray-700">{r.basic_account_no}</td>
                     <td className="table-td font-mono text-xs">

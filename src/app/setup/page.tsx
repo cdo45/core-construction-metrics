@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import CategoryEditor from "@/components/setup/CategoryEditor";
 import ExcludedAccountsTable from "@/components/setup/ExcludedAccountsTable";
+import { useTableSort, type SortSpec } from "@/hooks/useTableSort";
+import SortableHeader from "@/components/ui/SortableHeader";
+
+const GL_SORT_KEY = "tablesort:GlAccountsSection";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -528,6 +532,23 @@ function GlAccountsSection({
     setEditTarget(acc);
   }
 
+  // Default sort: account_no ASC → division ASC. Division isn't rendered in
+  // this section's columns, but it's on the GlAccount type and serves as a
+  // useful tiebreaker when multiple rows share an account_no.
+  const defaultSort = useMemo<SortSpec<GlAccount>>(
+    () => ({
+      column: "account_no",
+      direction: "asc",
+      secondary: [{ column: "division", direction: "asc" }],
+    }),
+    [],
+  );
+  const { sortedData: sortedAccounts, sortBy, sortState } = useTableSort(
+    accounts,
+    defaultSort,
+    GL_SORT_KEY,
+  );
+
   async function handleAddAccount(e: React.FormEvent) {
     e.preventDefault();
     setFormSaving(true);
@@ -613,23 +634,23 @@ function GlAccountsSection({
           <table className="w-full min-w-[720px]">
             <thead>
               <tr>
-                <th className="table-th w-24">Account #</th>
-                <th className="table-th">Description</th>
-                <th className="table-th w-28">Normal Balance</th>
-                <th className="table-th w-44">Category</th>
-                <th className="table-th w-20 text-center">Active</th>
+                <SortableHeader<GlAccount> label="Account #"     column="account_no"     sortState={sortState} onSort={sortBy} className="w-24" />
+                <SortableHeader<GlAccount> label="Description"    column="description"    sortState={sortState} onSort={sortBy} />
+                <SortableHeader<GlAccount> label="Normal Balance" column="normal_balance" sortState={sortState} onSort={sortBy} className="w-28" />
+                <SortableHeader<GlAccount> label="Category"       column="category_name"  sortState={sortState} onSort={sortBy} className="w-44" />
+                <SortableHeader<GlAccount> label="Active"         column="is_active"      sortState={sortState} onSort={sortBy} className="w-20" align="center" />
                 <th className="table-th w-24 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {accounts.length === 0 ? (
+              {sortedAccounts.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-6 text-center text-sm text-gray-400 italic">
                     No GL accounts yet. Add one using the form below.
                   </td>
                 </tr>
               ) : (
-                accounts.map((acc) => (
+                sortedAccounts.map((acc) => (
                   <tr key={acc.id} className={`group ${!acc.is_active ? "opacity-50" : ""}`}>
                     <td className="table-td font-mono font-medium text-gray-900">
                       {acc.account_no}
