@@ -58,7 +58,7 @@ export function KPISkeleton() {
 
 // ─── Card primitive ──────────────────────────────────────────────────────────
 
-function KPICard({
+export function KPICard({
   label,
   value,
   delta,
@@ -66,6 +66,8 @@ function KPICard({
   accent,
   inverseDelta = false,
   help,
+  badge,
+  extraLine,
 }: {
   label: string;
   value: string;
@@ -78,6 +80,12 @@ function KPICard({
   /** Optional plain-English explanation surfaced as a "?" icon next to
    *  the label. */
   help?: string;
+  /** Small tag rendered to the right of the value. Used for the "+LOC"
+   *  indicator when undrawn LOC is folded into a cash-based metric. */
+  badge?: { label: string; tone?: "green" | "blue" } | null;
+  /** Extra green sub-line rendered between value and subtitle. Used for
+   *  the "+ $X,XXX,XXX undrawn LOC" hint under Cash on Hand. */
+  extraLine?: string | null;
 }) {
   let deltaColor = "text-gray-400";
   let ArrowIcon: React.ReactNode = null;
@@ -96,6 +104,11 @@ function KPICard({
     );
   }
 
+  const badgeCls =
+    badge?.tone === "blue"
+      ? "bg-blue-50 text-blue-700 border-blue-200"
+      : "bg-green-50 text-green-700 border-green-200";
+
   return (
     <div
       className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
@@ -105,9 +118,19 @@ function KPICard({
         <span className="truncate">{label}</span>
         {help && <InfoTooltip text={help} />}
       </p>
-      <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight">
-        {value}
+      <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight flex items-baseline gap-2">
+        <span>{value}</span>
+        {badge && (
+          <span
+            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${badgeCls}`}
+          >
+            {badge.label}
+          </span>
+        )}
       </p>
+      {extraLine && (
+        <p className="text-xs text-green-700 font-medium truncate">{extraLine}</p>
+      )}
       {delta !== undefined && delta !== null ? (
         <p className={`text-xs font-medium flex items-center gap-1 ${deltaColor}`}>
           {ArrowIcon}
@@ -151,11 +174,24 @@ const COLORS = {
 export default function KPICards({
   weeks,
   pnl,
+  includeLoc,
+  onIncludeLocChange,
+  locUndrawn,
 }: {
   weeks: WeekMetric[];
   /** Window-level P&L totals; when provided, the P&L row shows
    *  filter-window totals instead of per-week snapshots. */
   pnl?: PnlSummary | null;
+  /** When true, cash-based Liquidity / Ratios / Payroll Runway cards fold
+   *  undrawn LOC into cash. Controlled from the parent dashboard page so
+   *  both KPICards and RunwayKPICards observe the same state. */
+  includeLoc?: boolean;
+  /** Fired when the user flips the Include-LOC pill. Wired to the
+   *  dashboard's localStorage-backed state. */
+  onIncludeLocChange?: (next: boolean) => void;
+  /** $ amount of unused LOC capacity. Folded into cash-based metrics
+   *  when includeLoc is true. */
+  locUndrawn?: number;
 }) {
   if (weeks.length === 0) return <KPISkeleton />;
 
@@ -167,28 +203,93 @@ export default function KPICards({
   const fmtRatio = (v: number | null | undefined) =>
     v === null || v === undefined || !isFinite(v) ? "—" : v.toFixed(2);
 
+  // Effective cash folds in undrawn LOC when the toggle is on. All six
+  // cash-based metrics flow from this single number:
+  //   cash' = cash + (includeLoc ? locUndrawn : 0)
+  // Ratios are recomputed directly from the underlying AP + payroll
+  // accruals (both on WeekMetric); coverage / runway are scaled by
+  // (cash' / cash) rather than re-derived from the raw weekly burn, so
+  // we don't need to plumb the burn inputs into this client.
+  const locAmount = includeLoc ? (locUndrawn ?? 0) : 0;
+  const baseCash = latest.cat_1_cash;
+  const effectiveCash = baseCash + locAmount;
+  const cashScale = baseCash > 0 ? effectiveCash / baseCash : 1;
+
+  const liab = latest.ap + latest.payroll_accruals;
+
+  const effNetLiquidity = latest.net_liquidity + locAmount;
+  const effCurrentRatio =
+    liab > 0 ? (effectiveCash + latest.cat_2_ar) / liab : null;
+  const effQuickRatio = liab > 0 ? effectiveCash / liab : null;
+  const effCashCoverage =
+    latest.cash_coverage_weeks !== null
+      ? latest.cash_coverage_weeks * cashScale
+      : latest.cash_coverage_weeks;
+  const effPayrollRunway =
+    latest.payroll_runway_wks !== null
+      ? latest.payroll_runway_wks * cashScale
+      : latest.payroll_runway_wks;
+
+  const locBadge = includeLoc ? { label: "+LOC", tone: "green" as const } : null;
+  const undrawnExtra =
+    includeLoc && (locUndrawn ?? 0) > 0
+      ? `+ ${fmtMoneyShort(locUndrawn)} undrawn LOC`
+      : null;
+
   return (
     <div className="flex flex-col gap-6">
+      {/* LOC toggle. Shown even when parent didn't wire onIncludeLocChange
+          so the dashboard always gets a visible control; if no handler is
+          passed the pill is inert. */}
+      {typeof includeLoc === "boolean" && (
+        <div className="flex items-center gap-2 -mb-2">
+          <button
+            type="button"
+            onClick={() => onIncludeLocChange?.(!includeLoc)}
+            className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-medium transition-colors ${
+              includeLoc
+                ? "bg-green-50 text-green-700 border-green-300"
+                : "bg-white text-gray-600 border-gray-300 hover:bg-gray-50"
+            }`}
+            aria-pressed={includeLoc}
+          >
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${
+                includeLoc ? "bg-green-500" : "bg-gray-300"
+              }`}
+            />
+            Include LOC ($2M facility)
+          </button>
+          <InfoTooltip
+            align="left"
+            text="Adds undrawn LOC capacity ($2M limit minus current drawn) to liquidity. Treats your unused borrowing power as available cash."
+          />
+        </div>
+      )}
+
       <SectionRow title="Liquidity">
         <KPICard
           label="Cash on Hand"
-          value={fmtMoneyShort(latest.cat_1_cash)}
+          value={fmtMoneyShort(baseCash)}
           delta={latest.cash_change}
           subtitle="Across all bank accounts"
           accent={COLORS.cash}
+          extraLine={undrawnExtra}
         />
         <KPICard
           label="Net Liquidity"
-          value={fmtMoneyShort(latest.net_liquidity)}
+          value={fmtMoneyShort(effNetLiquidity)}
           delta={latest.net_liquidity_change}
           subtitle="Cash − AP − Payroll Accruals"
           accent={COLORS.netLiq}
+          badge={locBadge}
         />
         <KPICard
           label="Cash Coverage"
-          value={fmtWeeks(latest.cash_coverage_weeks)}
+          value={fmtWeeks(effCashCoverage)}
           subtitle="Weeks of AP covered by Cash"
           accent={COLORS.runway}
+          badge={locBadge}
         />
       </SectionRow>
 
@@ -209,24 +310,27 @@ export default function KPICards({
         />
         <KPICard
           label="Payroll Runway"
-          value={fmtWeeks(latest.payroll_runway_wks)}
+          value={fmtWeeks(effPayrollRunway)}
           subtitle="Weeks of Payroll covered by Cash"
           accent={COLORS.runway}
+          badge={locBadge}
         />
       </SectionRow>
 
       <SectionRow title="Ratios">
         <KPICard
           label="Current Ratio"
-          value={fmtRatio(latest.current_ratio)}
+          value={fmtRatio(effCurrentRatio)}
           subtitle="(Cash + AR) ÷ (AP + Payroll Accruals)"
           accent={COLORS.ratio}
+          badge={locBadge}
         />
         <KPICard
           label="Quick Ratio"
-          value={fmtRatio(latest.quick_ratio)}
+          value={fmtRatio(effQuickRatio)}
           subtitle="Cash ÷ (AP + Payroll Accruals)"
           accent={COLORS.ratio}
+          badge={locBadge}
         />
         <KPICard
           label="AR to AP"

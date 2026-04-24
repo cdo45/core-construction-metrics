@@ -28,6 +28,7 @@ function RunwayCard({
   help,
   accent,
   valueColor,
+  badge,
 }: {
   label: string;
   value: string;
@@ -35,6 +36,10 @@ function RunwayCard({
   help: string;
   accent: string;
   valueColor?: string;
+  /** Small inline tag rendered to the right of the value — used for the
+   *  "+LOC" marker when undrawn LOC is folded into the Weeks of Runway
+   *  number. */
+  badge?: { label: string } | null;
 }) {
   return (
     <div
@@ -48,9 +53,14 @@ function RunwayCard({
         <InfoTooltip text={help} />
       </div>
       <p
-        className={`text-2xl font-bold tabular-nums leading-tight ${valueColor ?? "text-gray-900"}`}
+        className={`text-2xl font-bold tabular-nums leading-tight flex items-baseline gap-2 ${valueColor ?? "text-gray-900"}`}
       >
-        {value}
+        <span>{value}</span>
+        {badge && (
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-green-50 text-green-700 border-green-200">
+            {badge.label}
+          </span>
+        )}
       </p>
       <p className="text-xs text-gray-400 truncate">{subtitle}</p>
     </div>
@@ -68,7 +78,17 @@ const COLORS = {
   grow:        "#B7791F",
 };
 
-export default function RunwayKPICards({ runway }: { runway: RunwaySummary | null }) {
+export default function RunwayKPICards({
+  runway,
+  includeLoc,
+  locUndrawn,
+}: {
+  runway: RunwaySummary | null;
+  /** When true, Weeks of Runway uses (cash + undrawn LOC) / burn. Owned
+   *  by the parent dashboard page; mirror of the prop passed to KPICards. */
+  includeLoc?: boolean;
+  locUndrawn?: number;
+}) {
   if (!runway) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -88,6 +108,16 @@ export default function RunwayKPICards({ runway }: { runway: RunwaySummary | nul
     netCashFlow > 0 ? "text-green-700" : netCashFlow < 0 ? "text-red-700" : "text-gray-900";
 
   const growthPctLabel = `${Math.round(runway.growth_target_pct * 100)}%`;
+
+  // Weeks of Runway recomputed with LOC: (cash + loc_undrawn) / burn.
+  // Direct formula because runway.avg_weekly_burn is exposed on the
+  // summary — no scaling trick needed here.
+  const locAmount = includeLoc ? (locUndrawn ?? 0) : 0;
+  const weeksOfRunway =
+    runway.avg_weekly_burn > 0
+      ? (runway.current_cash + locAmount) / runway.avg_weekly_burn
+      : runway.weeks_of_runway;
+  const runwayBadge = includeLoc ? { label: "+LOC" } : null;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -115,9 +145,10 @@ export default function RunwayKPICards({ runway }: { runway: RunwaySummary | nul
       />
       <RunwayCard
         label="Weeks of Runway"
-        value={fmtWeeks(runway.weeks_of_runway)}
+        value={fmtWeeks(weeksOfRunway)}
         subtitle={`At current burn • anchor ${runway.anchor_week_ending ?? "—"}`}
         accent={COLORS.runway}
+        badge={runwayBadge}
         help="Worst case: if collections stopped tomorrow, how many weeks of cash until you're out. Current cash ÷ weekly burn. Example: $2M cash ÷ $500K/wk burn = 4 weeks. Reality is better because you'll keep collecting — this is the floor."
       />
       <RunwayCard

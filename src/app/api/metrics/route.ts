@@ -33,6 +33,13 @@ const ACCT_PAYROLL_RUN_FIELD  = 6080;         // Field payroll
 const ACCTS_CASH_COLLECTED = [1021, 1027, 1120] as const;
 const ACCTS_PAYROLL_PAID   = [5101, 5210, 5220, 5250, 6080, 6100] as const;
 
+// Line of credit — hardcoded single-facility model. Account 2050 "LINE OF
+// CREDIT" (cat 3) carries the current drawn balance (credit-normal, so
+// stored negative). Limit is configured in code, not in the DB; no
+// facility editor.
+const LOC_LIMIT = 2_000_000;
+const LOC_ACCOUNT_NO = 2050;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface WeekMetric {
@@ -171,6 +178,13 @@ export interface MetricsResponse {
   months: MonthMetric[];
   runway: RunwaySummary;
   pnl: PnlSummary;
+  // Line of credit snapshot, anchored to the last active week in the
+  // filter window. See LOC_LIMIT / LOC_ACCOUNT_NO constants at top.
+  //   loc_drawn   = ABS(end_balance of 2050) at anchor week
+  //   loc_undrawn = max(0, loc_limit − loc_drawn)
+  loc_limit: number;
+  loc_drawn: number;
+  loc_undrawn: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -286,12 +300,14 @@ export async function GET(req: NextRequest) {
     // Ratios + runway share this query so the DB only does the JOIN once.
     // Accounts included:
     //   2005                      A/P Trade              (ratios + runway)
+    //   2050                      Line of Credit          (LOC toggle)
     //   2150-2166 (range)          Payroll accruals       (ratios)
     //   5101, 6080                 Labor + field          (ratios + runway)
     //   1021, 1027, 1120           Cash collection deposits (runway)
     //   5210, 5220, 5250, 6100     Payroll-related debits  (runway)
     const runwayAccountList = [
       ACCT_AP,
+      LOC_ACCOUNT_NO,
       ACCT_PAYROLL_RUN_DIRECT,
       ACCT_PAYROLL_RUN_FIELD,
       ...ACCTS_CASH_COLLECTED,
@@ -678,7 +694,26 @@ export async function GET(req: NextRequest) {
       operating_margin_pct: pnlRevenue !== 0 ? (pnlOpIncome / pnlRevenue) * 100 : null,
     };
 
-    return NextResponse.json({ weeks, months, runway, pnl } satisfies MetricsResponse);
+    // ── LOC snapshot ────────────────────────────────────────────────────────
+    // Anchored to the last active week (same anchor used by runway totals).
+    // 2050 is credit-normal so stored negative; Math.abs yields drawn dollars.
+    // If the anchor or the LOC row isn't present, treat drawn as 0 so the
+    // response always ships a numeric triple.
+    const locAcctEnd = anchor
+      ? (perWeekAcct.get(anchor.week_ending)?.get(LOC_ACCOUNT_NO)?.end ?? 0)
+      : 0;
+    const loc_drawn = Math.abs(locAcctEnd);
+    const loc_undrawn = Math.max(0, LOC_LIMIT - loc_drawn);
+
+    return NextResponse.json({
+      weeks,
+      months,
+      runway,
+      pnl,
+      loc_limit: LOC_LIMIT,
+      loc_drawn,
+      loc_undrawn,
+    } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

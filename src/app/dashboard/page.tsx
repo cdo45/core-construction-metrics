@@ -76,6 +76,29 @@ function DashboardInner() {
   // is an exploratory knob; FY/month carry the link-shareable state.
   const [growthTarget, setGrowthTarget] = useState(0.10);
 
+  // "Include LOC" toggle owned here so KPICards and RunwayKPICards observe
+  // the same state. Default OFF; hydrated from localStorage after mount so
+  // SSR and first client paint agree.
+  const [includeLoc, setIncludeLoc] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined"
+        ? window.localStorage.getItem("include_loc")
+        : null;
+      if (raw === "true") setIncludeLoc(true);
+    } catch {
+      // ignore
+    }
+  }, []);
+  const onIncludeLocChange = useCallback((next: boolean) => {
+    setIncludeLoc(next);
+    try {
+      window.localStorage.setItem("include_loc", String(next));
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // 1) Load calendar so we know which FYs + months exist and which are "active".
   useEffect(() => {
     fetch("/api/weeks")
@@ -308,7 +331,27 @@ function DashboardInner() {
       )}
 
       <div className="flex flex-col gap-8">
-        {loading ? <KPISkeleton /> : <KPICards weeks={weeks} pnl={data?.pnl ?? null} />}
+        {loading ? (
+          <KPISkeleton />
+        ) : (
+          <KPICards
+            weeks={weeks}
+            pnl={data?.pnl ?? null}
+            includeLoc={includeLoc}
+            onIncludeLocChange={onIncludeLocChange}
+            locUndrawn={data?.loc_undrawn}
+          />
+        )}
+
+        {/* LOC status line — informational, always visible when LOC data
+            is loaded. Lives just below the KPI grid per spec. */}
+        {!loading && data && (
+          <LocStatusLine
+            drawn={data.loc_drawn}
+            limit={data.loc_limit}
+            undrawn={data.loc_undrawn}
+          />
+        )}
 
         {!loading && weeks.length > 0 && (
           <>
@@ -317,7 +360,11 @@ function DashboardInner() {
             <DebtPaydownChart weeks={weeks} />
 
             <SectionHeader>═══ CASH RUNWAY &amp; GROWTH ═══</SectionHeader>
-            <RunwayKPICards runway={data?.runway ?? null} />
+            <RunwayKPICards
+              runway={data?.runway ?? null}
+              includeLoc={includeLoc}
+              locUndrawn={data?.loc_undrawn}
+            />
             <GrowthTargetSlider value={growthTarget} onCommit={setGrowthTarget} />
             <CashFlowTrendChart weeks={weeks} runway={data?.runway ?? null} />
             <WhatIfCalculator runway={data?.runway ?? null} />
@@ -337,5 +384,35 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
     <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-widest text-center mt-2">
       {children}
     </h2>
+  );
+}
+
+// Informational one-liner under the KPI grid. Always visible regardless
+// of the "Include LOC" toggle — the toggle only controls whether the
+// undrawn balance folds into liquidity math.
+function LocStatusLine({
+  drawn,
+  limit,
+  undrawn,
+}: {
+  drawn: number;
+  limit: number;
+  undrawn: number;
+}) {
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(n);
+  return (
+    <p className="text-xs text-gray-500 -mt-4">
+      LOC: <span className="tabular-nums text-gray-700">{fmt(drawn)}</span> drawn
+      {" / "}
+      <span className="tabular-nums text-gray-700">{fmt(limit)}</span> limit
+      {" · "}
+      <span className="tabular-nums text-green-700">{fmt(undrawn)}</span> undrawn
+    </p>
   );
 }
