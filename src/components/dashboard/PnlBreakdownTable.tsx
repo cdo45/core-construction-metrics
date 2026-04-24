@@ -1,8 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
-import type { PnlBreakdownResponse, PnlCategoryGroup } from "@/app/api/pnl-breakdown/route";
+import type {
+  PnlBreakdownResponse,
+  PnlCategoryGroup,
+  PnlAccount,
+} from "@/app/api/pnl-breakdown/route";
+import { useTableSort, type SortSpec } from "@/hooks/useTableSort";
+import SortableHeader from "@/components/ui/SortableHeader";
+
+const SORT_KEY_PREFIX = "tablesort:PnlBreakdownTable";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -34,18 +42,38 @@ function CategoryRow({
   label,
   group,
   display,
+  storageSlug,
 }: {
   label: string;
   group: PnlCategoryGroup;
   /** How to format the total: revenue stays positive; cost categories render
    *  with a leading minus so the math reads as subtraction. */
   display: "revenue" | "cost";
+  /** Per-category storage key suffix so the 4 categories remember their
+   *  sort independently. */
+  storageSlug: string;
 }) {
   const [open, setOpen] = useState(false);
   const disabled = group.accounts.length === 0;
 
   const formattedTotal =
     display === "cost" ? fmtSigned(group.total, "pos") : fmtMoney(group.total);
+
+  // Each category sorts independently. Default: account_no ASC → division ASC
+  // (with NULLS FIRST for divisionless rows via the hook's comparator).
+  const defaultSort = useMemo<SortSpec<PnlAccount>>(
+    () => ({
+      column: "account_no",
+      direction: "asc",
+      secondary: [{ column: "division", direction: "asc" }],
+    }),
+    [],
+  );
+  const { sortedData, sortBy, sortState } = useTableSort(
+    group.accounts,
+    defaultSort,
+    `${SORT_KEY_PREFIX}:${storageSlug}`,
+  );
 
   return (
     <div className="border-t border-gray-100 first:border-t-0">
@@ -83,8 +111,16 @@ function CategoryRow({
       {open && !disabled && (
         <div className="bg-gray-50 border-t border-gray-100">
           <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-100/60 text-[10px] uppercase tracking-wider text-gray-500">
+                <SortableHeader<PnlAccount> label="Account #"  column="account_no"  sortState={sortState} onSort={sortBy} className="w-24" />
+                <SortableHeader<PnlAccount> label="Div"        column="division"    sortState={sortState} onSort={sortBy} className="w-16" />
+                <SortableHeader<PnlAccount> label="Description" column="description" sortState={sortState} onSort={sortBy} />
+                <SortableHeader<PnlAccount> label="Total"      column="total"       sortState={sortState} onSort={sortBy} className="w-28" align="right" />
+              </tr>
+            </thead>
             <tbody>
-              {group.accounts.map((acct) => (
+              {sortedData.map((acct) => (
                 <tr
                   key={`${acct.account_no}|${acct.division}`}
                   className="border-t border-gray-100 first:border-t-0"
@@ -134,10 +170,10 @@ export default function PnlBreakdownTable({
         </div>
       ) : (
         <>
-          <CategoryRow label="Revenue"           group={data.revenue}          display="revenue" />
-          <CategoryRow label="Direct Job Costs"  group={data.direct_job_costs} display="cost" />
-          <CategoryRow label="Payroll (Field)"   group={data.payroll_field}    display="cost" />
-          <CategoryRow label="Overhead"          group={data.overhead}         display="cost" />
+          <CategoryRow label="Revenue"           group={data.revenue}          display="revenue" storageSlug="revenue" />
+          <CategoryRow label="Direct Job Costs"  group={data.direct_job_costs} display="cost"    storageSlug="djc" />
+          <CategoryRow label="Payroll (Field)"   group={data.payroll_field}    display="cost"    storageSlug="payroll_field" />
+          <CategoryRow label="Overhead"          group={data.overhead}         display="cost"    storageSlug="overhead" />
           <div className="border-t-2 border-gray-300 px-4 py-3 flex items-center justify-between">
             <span className="text-sm font-bold text-gray-900">Operating Income</span>
             <span
