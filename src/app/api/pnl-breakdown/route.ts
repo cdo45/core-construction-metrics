@@ -122,42 +122,60 @@ export async function GET(req: NextRequest) {
       [CAT.DJC]:           { total: 0, cash_total: 0, non_cash_total: 0, depreciation_total: 0, allocation_total: 0, accounts: [] },
     };
 
-    // Display values are positive magnitudes — the category's sign is
-    // implicit (Revenue adds, cost categories subtract). Wrapping in
-    // Math.abs guards against legitimate negative weeks (e.g. a refund-
-    // heavy week) masquerading as the sign of an accounting mistake.
+    // Per-account display values:
+    //   - Revenue & non-allocation expenses → Math.abs(signed_total).
+    //     These are "magnitudes": revenue adds, costs subtract, and the
+    //     category orientation is implicit. Math.abs guards against a
+    //     stray negative week flipping a line red by mistake.
+    //   - Allocations (is_allocation = true) → PRESERVE SIGN. Allocation
+    //     accounts carry credits that offset costs OUT of the category
+    //     (e.g. 6050 ALLOCATED EQ. COSTS with a $145K credit to DJC Div
+    //     10 means $145K was moved out of that division). If we ABS'd
+    //     them, the negative offset would flip positive and inflate the
+    //     category total. Keeping the sign lets DJC.total correctly
+    //     equal "real DJC − allocations out".
+    // The aggregates below propagate from these per-account totals:
+    //   total              signed sum (allocations subtract naturally)
+    //   cash_total         Math.abs, is_non_cash = false
+    //   depreciation_total Math.abs, is_non_cash = true AND NOT is_allocation
+    //   allocation_total   SIGNED, is_allocation = true
+    //   non_cash_total     = depreciation_total + allocation_total
+    //                       (mixed sign; backwards-compat)
     for (const r of rows) {
       const cid = Number(r.category_id);
-      const displayTotal = Math.abs(parseFloat(String(r.signed_total)));
+      const rawSigned = parseFloat(String(r.signed_total));
       const isNonCash = Boolean(r.is_non_cash);
       // is_allocation only matters when is_non_cash is true; coerce to
       // false otherwise so a stray flag on a cash row can't leak into the
       // allocation bucket.
       const isAllocation = isNonCash && Boolean(r.is_allocation);
+      const accountTotal = isAllocation ? rawSigned : Math.abs(rawSigned);
       if (!groups[cid]) continue;
       groups[cid].accounts.push({
         account_no: Number(r.account_no),
         division: String(r.division ?? ""),
         description: String(r.description ?? ""),
-        total: displayTotal,
+        total: accountTotal,
         is_non_cash: isNonCash,
         is_allocation: isAllocation,
       });
-      groups[cid].total += displayTotal;
+      groups[cid].total += accountTotal;
       if (isNonCash) {
-        groups[cid].non_cash_total += displayTotal;
+        groups[cid].non_cash_total += accountTotal;
         if (isAllocation) {
-          groups[cid].allocation_total += displayTotal;
+          groups[cid].allocation_total += accountTotal; // signed
         } else {
-          groups[cid].depreciation_total += displayTotal;
+          groups[cid].depreciation_total += accountTotal; // magnitude
         }
       } else {
-        groups[cid].cash_total += displayTotal;
+        groups[cid].cash_total += accountTotal;
       }
     }
 
-    // Re-sort per-category by display value (desc) — the SQL ORDER BY was
-    // on signed_total which isn't the same order after the Math.abs above.
+    // Re-sort per-category by display value (desc). With signed allocation
+    // totals, they'll naturally fall to the bottom of a cost category
+    // (typically negative) — matches the visual grouping in the UI where
+    // allocations render below depreciation below cash.
     for (const cid of Object.keys(groups) as unknown as number[]) {
       groups[cid].accounts.sort((a, b) => b.total - a.total);
     }
