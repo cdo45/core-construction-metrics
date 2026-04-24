@@ -888,21 +888,27 @@ export async function GET(req: NextRequest) {
         trend_series.gross_margin_pct.push({ period_label: label, value: gmPct });
         trend_series.operating_margin_pct.push({ period_label: label, value: omPct });
 
-        // Runway-section monthly sums + derived coast/grow.
+        // Runway-section monthly aggregates. Collections / burn / net are
+        // FLOWS → sum over the month (matches how CFOs read "monthly
+        // collections"). Coast and grow are per-WEEK RATES → average so
+        // the sparkline point scale matches the card's "$X/wk" readout.
         let sumCollected = 0, sumBurn = 0, sumWeeklyRev = 0;
         for (const w of group) {
           sumCollected += w.weekly_cash_collected;
           sumBurn      += w.weekly_ap_paid + w.weekly_payroll_paid + w.weekly_overhead_paid;
           sumWeeklyRev += w.weekly_revenue;
         }
+        const weeksInMonth = group.length;
+        const avgBurn = weeksInMonth > 0 ? sumBurn / weeksInMonth : 0;
+        const avgGrow =
+          weeksInMonth > 0
+            ? avgBurn + growthTargetPct * (sumWeeklyRev / weeksInMonth)
+            : 0;
         trend_series.weekly_collections.push({ period_label: label, value: sumCollected });
         trend_series.weekly_burn.push({ period_label: label, value: sumBurn });
         trend_series.net_cash_flow.push({ period_label: label, value: sumCollected - sumBurn });
-        trend_series.coast_weekly.push({ period_label: label, value: sumBurn });
-        trend_series.grow_weekly.push({
-          period_label: label,
-          value: sumBurn + growthTargetPct * sumWeeklyRev,
-        });
+        trend_series.coast_weekly.push({ period_label: label, value: avgBurn });
+        trend_series.grow_weekly.push({ period_label: label, value: avgGrow });
       }
     }
 

@@ -118,16 +118,26 @@ export function KPICard({
       ? "bg-blue-50 text-blue-700 border-blue-200"
       : "bg-green-50 text-green-700 border-green-200";
 
+  // Card layout adapts to viewport:
+  //   ≥ sm (640px): value + sparkline on one row, sparkline right-aligned.
+  //   < sm:         stack vertically (value on top, sparkline below).
+  // min-w prevents the sparkline from squishing the value at the breakpoint
+  // edge.
+  const valueRowLayout = sparkline
+    ? "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2"
+    : "flex items-center";
+  const cardMinWidth = sparkline ? "min-w-[240px]" : "";
+
   return (
     <div
-      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate flex items-center gap-1">
         <span className="truncate">{label}</span>
         {help && <InfoTooltip text={help} />}
       </p>
-      <div className="flex items-center justify-between gap-2">
+      <div className={valueRowLayout}>
         <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight flex items-baseline gap-2 min-w-0">
           <span className="truncate">{value}</span>
           {badge && (

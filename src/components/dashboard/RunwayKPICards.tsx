@@ -45,9 +45,17 @@ function RunwayCard({
   /** Optional Sparkline node rendered next to the value. */
   sparkline?: React.ReactNode;
 }) {
+  // Same responsive layout rules as KPICard — prevent the sparkline from
+  // collapsing the value at the sm breakpoint edge; stack vertically
+  // below 640px.
+  const valueRowLayout = sparkline
+    ? "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2"
+    : "flex items-center";
+  const cardMinWidth = sparkline ? "min-w-[240px]" : "";
+
   return (
     <div
-      className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <div className="flex items-center gap-1.5">
@@ -56,7 +64,7 @@ function RunwayCard({
         </p>
         <InfoTooltip text={help} />
       </div>
-      <div className="flex items-center justify-between gap-2">
+      <div className={valueRowLayout}>
         <p
           className={`text-2xl font-bold tabular-nums leading-tight flex items-baseline gap-2 min-w-0 ${valueColor ?? "text-gray-900"}`}
         >
