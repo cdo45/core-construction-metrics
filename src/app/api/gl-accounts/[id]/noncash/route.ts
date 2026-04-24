@@ -25,12 +25,23 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       );
     }
 
-    const [updated] = await sql`
-      UPDATE gl_accounts
-      SET is_non_cash = ${body.is_non_cash}
-      WHERE id = ${glId}
-      RETURNING id, account_no, is_non_cash
-    `;
+    // Data-integrity invariant: is_allocation is a sub-flag of is_non_cash.
+    // When the user un-flags is_non_cash, drop is_allocation too so a stale
+    // allocation=true can't linger on a row that's no longer non-cash.
+    const [updated] = body.is_non_cash
+      ? await sql`
+          UPDATE gl_accounts
+          SET is_non_cash = true
+          WHERE id = ${glId}
+          RETURNING id, account_no, is_non_cash, is_allocation
+        `
+      : await sql`
+          UPDATE gl_accounts
+          SET is_non_cash = false,
+              is_allocation = false
+          WHERE id = ${glId}
+          RETURNING id, account_no, is_non_cash, is_allocation
+        `;
 
     if (!updated) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -40,6 +51,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
       id: Number(updated.id),
       account_no: Number(updated.account_no),
       is_non_cash: Boolean(updated.is_non_cash),
+      is_allocation: Boolean(updated.is_allocation),
     });
   } catch (err) {
     console.error("PATCH /api/gl-accounts/[id]/noncash error:", err);

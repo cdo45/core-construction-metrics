@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
         c.color AS category_color,
         g.is_active,
         g.is_non_cash,
+        g.is_allocation,
         g.created_at,
         COUNT(DISTINCT wb.id)::int       AS balance_count,
         COALESCE(tx.tx_count, 0)::int    AS tx_count,

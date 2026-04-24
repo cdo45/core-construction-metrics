@@ -28,6 +28,11 @@ export interface EditorAccount {
   /** Depreciation / internal allocation flag. When true the account rolls
    *  into the non-cash subgroup on the P&L breakdown. */
   is_non_cash?: boolean;
+  /** Sub-classification of is_non_cash. Only meaningful when is_non_cash
+   *  is true. When true, the account is an internal cost transfer (e.g.
+   *  6050 ALLOCATED EQ. COSTS) and does NOT count toward the cash
+   *  operating income add-back. */
+  is_allocation?: boolean;
   tx_count?: number;
   tx_week_count?: number;
 }
@@ -278,8 +283,13 @@ export default function CategoryEditor({
   async function saveNonCash(acc: EditorAccount, next: boolean) {
     // Optimistic update — flip locally first, roll back on failure. Keeps
     // the checkbox snappy on the row even if the API round-trip is slow.
+    // Mirrors the server-side invariant: flipping is_non_cash off clears
+    // is_allocation so the sub-flag can't linger stale.
     setSavingId(acc.id);
-    onAccountUpdated({ ...acc, is_non_cash: next });
+    const optimistic: EditorAccount = next
+      ? { ...acc, is_non_cash: true }
+      : { ...acc, is_non_cash: false, is_allocation: false };
+    onAccountUpdated(optimistic);
     try {
       const res = await fetch(`/api/gl-accounts/${acc.id}/noncash`, {
         method: "PATCH",
@@ -290,8 +300,32 @@ export default function CategoryEditor({
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
     } catch (e) {
       // Roll back
-      onAccountUpdated({ ...acc, is_non_cash: !next });
+      onAccountUpdated(acc);
       setToast({ msg: `Failed to update non-cash on ${acc.account_no}: ${e instanceof Error ? e.message : String(e)}`, kind: "err", n: Date.now() });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function saveAllocation(acc: EditorAccount, next: boolean) {
+    // is_allocation only makes sense when is_non_cash is already true.
+    // Guarded at the server (409); this client-side check is for UX only
+    // so the checkbox appears disabled and we never round-trip on a
+    // rejected state.
+    if (next && !acc.is_non_cash) return;
+    setSavingId(acc.id);
+    onAccountUpdated({ ...acc, is_allocation: next });
+    try {
+      const res = await fetch(`/api/gl-accounts/${acc.id}/allocation`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_allocation: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+    } catch (e) {
+      onAccountUpdated(acc);
+      setToast({ msg: `Failed to update allocation on ${acc.account_no}: ${e instanceof Error ? e.message : String(e)}`, kind: "err", n: Date.now() });
     } finally {
       setSavingId(null);
     }
@@ -397,7 +431,7 @@ export default function CategoryEditor({
 
       {/* Table */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
-        <table className="w-full min-w-[860px] text-sm">
+        <table className="w-full min-w-[940px] text-sm">
           <thead className="bg-gray-50 sticky top-0">
             <tr>
               <SortableHeader<EditorAccount> label="Account #"  column="account_no"     sortState={sortState} onSort={sortBy} className="w-24" />
@@ -405,6 +439,7 @@ export default function CategoryEditor({
               <SortableHeader<EditorAccount> label="Description" column="description"    sortState={sortState} onSort={sortBy} />
               <SortableHeader<EditorAccount> label="Category"   column="category_id"    sortState={sortState} onSort={sortBy} className="w-56" />
               <SortableHeader<EditorAccount> label="Non-Cash"   column="is_non_cash"    sortState={sortState} onSort={sortBy} className="w-24" align="center" />
+              <SortableHeader<EditorAccount> label="Allocation" column="is_allocation"  sortState={sortState} onSort={sortBy} className="w-24" align="center" />
               <SortableHeader<EditorAccount> label="Normal"     column="normal_balance" sortState={sortState} onSort={sortBy} className="w-20" />
               <th className="table-th w-20 text-center">Exclude</th>
             </tr>
@@ -412,7 +447,7 @@ export default function CategoryEditor({
           <tbody>
             {sortedFiltered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400 italic">
+                <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400 italic">
                   No accounts match.
                 </td>
               </tr>
@@ -465,6 +500,23 @@ export default function CategoryEditor({
                       disabled={savingId === acc.id}
                       onChange={(e) => saveNonCash(acc, e.target.checked)}
                       className="h-4 w-4 cursor-pointer accent-[#1B2A4A]"
+                    />
+                  </td>
+                  <td className="table-td text-center">
+                    {/* Allocation is a sub-flag of non-cash — greyed out
+                        when the row isn't flagged non-cash. */}
+                    <input
+                      type="checkbox"
+                      aria-label={`Flag account ${acc.account_no} as internal allocation`}
+                      title={
+                        acc.is_non_cash
+                          ? "Internal cost transfer (not a true cash expense)"
+                          : "Mark Non-Cash first, then enable Allocation"
+                      }
+                      checked={Boolean(acc.is_allocation)}
+                      disabled={savingId === acc.id || !acc.is_non_cash}
+                      onChange={(e) => saveAllocation(acc, e.target.checked)}
+                      className="h-4 w-4 cursor-pointer accent-[#1B2A4A] disabled:cursor-not-allowed disabled:opacity-40"
                     />
                   </td>
                   <td className="table-td text-xs text-gray-500 uppercase">{acc.normal_balance}</td>
