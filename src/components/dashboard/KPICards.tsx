@@ -2,6 +2,7 @@
 
 import type { WeekMetric, PnlSummary } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
+import InfoTooltip from "@/components/ui/InfoTooltip";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ function KPICard({
   subtitle,
   accent,
   inverseDelta = false,
+  help,
 }: {
   label: string;
   value: string;
@@ -73,6 +75,9 @@ function KPICard({
   accent: string;
   /** If true, a decrease is favorable (green); e.g. for debt cards */
   inverseDelta?: boolean;
+  /** Optional plain-English explanation surfaced as a "?" icon next to
+   *  the label. */
+  help?: string;
 }) {
   let deltaColor = "text-gray-400";
   let ArrowIcon: React.ReactNode = null;
@@ -96,8 +101,9 @@ function KPICard({
       className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1"
       style={{ borderLeft: `4px solid ${accent}` }}
     >
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate">
-        {label}
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate flex items-center gap-1">
+        <span className="truncate">{label}</span>
+        {help && <InfoTooltip text={help} />}
       </p>
       <p className="text-2xl font-bold text-gray-900 tabular-nums leading-tight">
         {value}
@@ -246,8 +252,9 @@ export default function KPICards({
         <KPICard
           label="Operating Margin %"
           value={fmtPct(pnl?.operating_margin_pct)}
-          subtitle="After DJC + Payroll + Overhead"
+          subtitle="Accrual basis — see P&L for cash split"
           accent={COLORS.opMargin}
+          help="Accrual basis includes non-cash expenses like depreciation. See P&L Breakdown for cash-only view."
         />
       </SectionRow>
     </div>
