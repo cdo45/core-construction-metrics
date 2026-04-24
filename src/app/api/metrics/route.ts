@@ -205,6 +205,62 @@ const BENCHMARKS: Benchmarks = {
   payroll_runway_wks: 8,
 };
 
+// ─── KPI drilldowns ──────────────────────────────────────────────────────────
+//
+// Click-to-expand backing data for every KPI card on the dashboard. Each entry
+// carries the formula (plain English), the inputs that fed it, the literal
+// arithmetic, and — where applicable — the rolling-average week-by-week
+// breakdown and the contributing source accounts. The dashboard shells render
+// this verbatim; no client-side recomputation happens.
+
+export type DrilldownInputFormat = "money" | "ratio" | "pct" | "weeks" | "int";
+export type DrilldownBreakdownFormat = "money" | "int";
+
+export interface DrilldownInput {
+  label: string;
+  value: number;
+  format: DrilldownInputFormat;
+  note?: string;
+}
+
+export interface DrilldownBreakdownRow {
+  label: string;
+  value: number;
+  format: DrilldownBreakdownFormat;
+}
+
+export interface DrilldownBreakdown {
+  title: string;
+  rows: DrilldownBreakdownRow[];
+  aggregate_label: string;
+  aggregate_value: number;
+  methodology_note?: string;
+}
+
+export interface DrilldownAccountSource {
+  account_no: number;
+  division: string | null;
+  description: string;
+  contribution: number;
+}
+
+export interface DrilldownComputation {
+  expression: string;
+  result: string;
+}
+
+export interface DrilldownData {
+  formula_plain: string;
+  formula_latex?: string;
+  result: number;
+  inputs: DrilldownInput[];
+  computation: DrilldownComputation;
+  breakdown?: DrilldownBreakdown;
+  account_sources?: DrilldownAccountSource[];
+}
+
+export type DrilldownMap = Record<string, DrilldownData>;
+
 export interface MonthMetric {
   month: string; // "YYYY-MM"
   avg_cat_1_cash: number;
@@ -254,6 +310,9 @@ export interface MetricsResponse {
   trend_series: TrendSeries;
   trend_granularity: "week" | "month";
   benchmarks: Benchmarks;
+  // Click-to-expand backing data for every KPI card (formula, inputs,
+  // computation, rolling-window breakdown, source accounts).
+  drilldowns: DrilldownMap;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -912,6 +971,484 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── KPI drilldowns ──────────────────────────────────────────────────────
+    // Click-to-expand backing data for every KPI card. Each entry packages
+    // the formula in plain English, the inputs that fed it, the literal
+    // arithmetic, the rolling-window breakdown (where applicable), and the
+    // contributing GL accounts. The dashboard renders this verbatim — no
+    // client-side recomputation.
+    //
+    // Anchor-week per-account snapshot: pre-aggregates end_balance across
+    // divisions (one row per account_no) and joins gl_accounts for the
+    // user-facing description. Covers cat 1 cash + cat 2 AR + every account
+    // already pulled by the runway query (AP 2005, LOC 2050, payroll
+    // accruals 2150-2166, payroll-run accounts, deposit accounts).
+    const drilldownAccountList = [
+      ACCT_AP,
+      LOC_ACCOUNT_NO,
+      ACCT_PAYROLL_RUN_DIRECT,
+      ACCT_PAYROLL_RUN_FIELD,
+      ...ACCTS_CASH_COLLECTED,
+      ...ACCTS_PAYROLL_PAID,
+    ];
+    interface AnchorAcct {
+      description: string;
+      category_id: number | null;
+      end: number;
+    }
+    const anchorAccts = new Map<number, AnchorAcct>();
+    if (anchor) {
+      const anchorRows = await sql`
+        SELECT
+          ga.account_no,
+          MIN(ga.description) AS description,
+          MAX(ga.category_id) AS category_id,
+          SUM(wb.end_balance)::numeric AS end_sum
+        FROM weekly_balances wb
+        JOIN gl_accounts ga ON ga.id = wb.gl_account_id
+        WHERE wb.week_ending = ${anchor.week_ending}::date
+          AND ga.is_active = true
+          AND (
+            ga.category_id IN (${CAT.CASH}, ${CAT.AR})
+            OR ga.account_no = ANY(${drilldownAccountList}::int[])
+            OR ga.account_no BETWEEN ${ACCT_PAYROLL_ACCRUALS_MIN} AND ${ACCT_PAYROLL_ACCRUALS_MAX}
+          )
+        GROUP BY ga.account_no
+        ORDER BY ga.account_no
+      `;
+      for (const r of anchorRows) {
+        anchorAccts.set(Number(r.account_no), {
+          description: String(r.description ?? ""),
+          category_id: r.category_id == null ? null : Number(r.category_id),
+          end: n(r.end_sum),
+        });
+      }
+    }
+
+    // ── Drilldown formatters ────────────────────────────────────────────────
+    const fmtUSD0 = (v: number): string =>
+      new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(v);
+    const fmtRatio3 = (v: number): string => v.toFixed(3);
+    const fmtPct1 = (v: number): string => `${v.toFixed(1)}%`;
+    const fmtWeeks2 = (v: number): string => `${v.toFixed(2)} wks`;
+
+    // Build account_sources for a category at the anchor week. ABS values
+    // when the category is credit-normal (so AP / accrual sources display
+    // as positive contributions). Filters out zero-balance rows.
+    const sourcesForCategory = (
+      catId: number,
+      opts: { abs?: boolean } = {},
+    ): DrilldownAccountSource[] => {
+      const out: DrilldownAccountSource[] = [];
+      for (const [acctNo, info] of anchorAccts) {
+        if (info.category_id !== catId) continue;
+        const v = opts.abs ? Math.abs(info.end) : info.end;
+        if (v === 0) continue;
+        out.push({
+          account_no: acctNo,
+          division: null,
+          description: info.description,
+          contribution: v,
+        });
+      }
+      out.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+      return out;
+    };
+
+    const sourcesForAccountList = (
+      accts: readonly number[],
+      opts: { abs?: boolean } = {},
+    ): DrilldownAccountSource[] => {
+      const out: DrilldownAccountSource[] = [];
+      for (const acctNo of accts) {
+        const info = anchorAccts.get(acctNo);
+        if (!info) continue;
+        const v = opts.abs ? Math.abs(info.end) : info.end;
+        if (v === 0) continue;
+        out.push({
+          account_no: acctNo,
+          division: null,
+          description: info.description,
+          contribution: v,
+        });
+      }
+      return out;
+    };
+
+    // ── Drilldown map ───────────────────────────────────────────────────────
+    const drilldowns: DrilldownMap = {};
+
+    // Anchor-week breakdown windows. The 4-wk window backs the rolling
+    // coverage / payroll runway metrics; the 8-wk window backs the runway
+    // section. weeksBase still carries the hidden _ap_period_credit and
+    // _payroll_period_debit fields used for the 4-wk windows.
+    const last4Active = lastActiveWeeks(weeksBase, 4);
+    const last8Active = lastActiveWeeks(weeks, 8);
+
+    const baseCash = anchor?.cat_1_cash ?? 0;
+    const baseAr = anchor?.cat_2_ar ?? 0;
+    const baseAp = anchor?.ap ?? 0;
+    const baseAccruals = anchor?.payroll_accruals ?? 0;
+    const shortTermLiab = baseAp + baseAccruals;
+    const baseNetLiquidity = anchor?.net_liquidity ?? 0;
+
+    // Avg AP burn (4-wk rolling, anchored at last active week) for cash
+    // coverage. Uses the same hidden field (_ap_period_credit) the per-week
+    // computation used so the displayed breakdown matches the headline
+    // number exactly.
+    const avg4 = (fn: (w: typeof weeksBase[number]) => number): number =>
+      last4Active.length > 0
+        ? last4Active.reduce((s, w) => s + fn(w), 0) / last4Active.length
+        : 0;
+    const avg4ApBurn = avg4((w) => w._ap_period_credit);
+    const avg4Payroll = avg4((w) => w._payroll_period_debit);
+
+    // ─── Snapshot drilldowns ────────────────────────────────────────────────
+
+    drilldowns.cash = {
+      formula_plain: "Sum of end-of-week balances across all cash accounts (Category 1).",
+      result: baseCash,
+      inputs: [
+        {
+          label: "Cash on Hand (latest active week)",
+          value: baseCash,
+          format: "money",
+          note: anchor ? `End balance as of ${anchor.week_ending}` : undefined,
+        },
+      ],
+      computation: {
+        expression: "Σ end_balance(cat 1 accounts)",
+        result: fmtUSD0(baseCash),
+      },
+      account_sources: sourcesForCategory(CAT.CASH),
+    };
+
+    drilldowns.ar = {
+      formula_plain: "Sum of end-of-week balances across all A/R accounts (Category 2).",
+      result: baseAr,
+      inputs: [
+        {
+          label: "Accounts Receivable (latest active week)",
+          value: baseAr,
+          format: "money",
+          note: anchor ? `End balance as of ${anchor.week_ending}` : undefined,
+        },
+      ],
+      computation: {
+        expression: "Σ end_balance(cat 2 accounts)",
+        result: fmtUSD0(baseAr),
+      },
+      account_sources: sourcesForCategory(CAT.AR),
+    };
+
+    drilldowns.ap = {
+      formula_plain: "End-of-week balance of A/P Trade (account 2005), absolute value.",
+      result: baseAp,
+      inputs: [
+        {
+          label: "A/P Trade (account 2005)",
+          value: baseAp,
+          format: "money",
+          note: anchor ? `End balance as of ${anchor.week_ending}` : undefined,
+        },
+      ],
+      computation: {
+        expression: "|end_balance(2005)|",
+        result: fmtUSD0(baseAp),
+      },
+      account_sources: sourcesForAccountList([ACCT_AP], { abs: true }),
+    };
+
+    drilldowns.net_liquidity = {
+      formula_plain: "Cash on Hand − A/P − Payroll Accruals.",
+      result: baseNetLiquidity,
+      inputs: [
+        { label: "Cash on Hand",      value: baseCash,      format: "money", note: "Σ end_balance(cat 1)" },
+        { label: "A/P (account 2005)", value: baseAp,       format: "money", note: "|end_balance(2005)|" },
+        { label: "Payroll Accruals",   value: baseAccruals, format: "money", note: "|Σ end_balance(2150-2166)|" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(baseCash)} − ${fmtUSD0(baseAp)} − ${fmtUSD0(baseAccruals)}`,
+        result: fmtUSD0(baseNetLiquidity),
+      },
+    };
+
+    drilldowns.cash_coverage_weeks = {
+      formula_plain: "Cash on Hand ÷ 4-week rolling average of AP paid (bills paid out of cash).",
+      result: anchor?.cash_coverage_weeks ?? 0,
+      inputs: [
+        { label: "Cash on Hand",                value: baseCash,    format: "money" },
+        { label: "Avg Weekly AP Burn (4-wk)",   value: avg4ApBurn,  format: "money", note: "Mean of period_credit posts to account 2005 over the last 4 active weeks" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(baseCash)} ÷ ${fmtUSD0(avg4ApBurn)}`,
+        result: anchor?.cash_coverage_weeks != null ? fmtWeeks2(anchor.cash_coverage_weeks) : "—",
+      },
+      breakdown: {
+        title: "4-Week AP Burn Calculation",
+        rows: last4Active.map((w) => ({
+          label: w.week_ending,
+          value: w._ap_period_credit,
+          format: "money" as const,
+        })),
+        aggregate_label: "Average",
+        aggregate_value: avg4ApBurn,
+        methodology_note: "Active weeks only; weeks with no GL activity are skipped so unimported future weeks don't drag the average toward zero.",
+      },
+      account_sources: sourcesForAccountList([ACCT_AP], { abs: true }),
+    };
+
+    drilldowns.payroll_runway_wks = {
+      formula_plain: "Cash on Hand ÷ 4-week rolling average of payroll cash-out (labor + field payroll).",
+      result: anchor?.payroll_runway_wks ?? 0,
+      inputs: [
+        { label: "Cash on Hand",                  value: baseCash,     format: "money" },
+        { label: "Avg Weekly Payroll (4-wk)",     value: avg4Payroll,  format: "money", note: "Mean of period_debit to accounts 5101 + 6080 over the last 4 active weeks" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(baseCash)} ÷ ${fmtUSD0(avg4Payroll)}`,
+        result: anchor?.payroll_runway_wks != null ? fmtWeeks2(anchor.payroll_runway_wks) : "—",
+      },
+      breakdown: {
+        title: "4-Week Payroll Calculation",
+        rows: last4Active.map((w) => ({
+          label: w.week_ending,
+          value: w._payroll_period_debit,
+          format: "money" as const,
+        })),
+        aggregate_label: "Average",
+        aggregate_value: avg4Payroll,
+        methodology_note: "Active weeks only; weeks with no GL activity are skipped.",
+      },
+      account_sources: sourcesForAccountList([ACCT_PAYROLL_RUN_DIRECT, ACCT_PAYROLL_RUN_FIELD], { abs: true }),
+    };
+
+    drilldowns.current_ratio = {
+      formula_plain: "(Cash + A/R) ÷ (A/P + Payroll Accruals).",
+      result: anchor?.current_ratio ?? 0,
+      inputs: [
+        { label: "Cash on Hand",     value: baseCash,      format: "money" },
+        { label: "A/R",              value: baseAr,        format: "money" },
+        { label: "A/P",              value: baseAp,        format: "money" },
+        { label: "Payroll Accruals", value: baseAccruals,  format: "money" },
+      ],
+      computation: {
+        expression: `(${fmtUSD0(baseCash)} + ${fmtUSD0(baseAr)}) ÷ (${fmtUSD0(baseAp)} + ${fmtUSD0(baseAccruals)})`,
+        result: anchor?.current_ratio != null ? fmtRatio3(anchor.current_ratio) : "—",
+      },
+    };
+
+    drilldowns.quick_ratio = {
+      formula_plain: "Cash ÷ (A/P + Payroll Accruals).",
+      result: anchor?.quick_ratio ?? 0,
+      inputs: [
+        { label: "Cash on Hand",     value: baseCash,      format: "money" },
+        { label: "A/P",              value: baseAp,        format: "money" },
+        { label: "Payroll Accruals", value: baseAccruals,  format: "money" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(baseCash)} ÷ (${fmtUSD0(baseAp)} + ${fmtUSD0(baseAccruals)})`,
+        result: anchor?.quick_ratio != null ? fmtRatio3(anchor.quick_ratio) : "—",
+      },
+    };
+
+    drilldowns.ar_to_ap = {
+      formula_plain: "A/R ÷ A/P.",
+      result: anchor?.ar_to_ap ?? 0,
+      inputs: [
+        { label: "A/R", value: baseAr, format: "money" },
+        { label: "A/P", value: baseAp, format: "money" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(baseAr)} ÷ ${fmtUSD0(baseAp)}`,
+        result: anchor?.ar_to_ap != null ? fmtRatio3(anchor.ar_to_ap) : "—",
+      },
+    };
+
+    // ─── P&L window drilldowns ──────────────────────────────────────────────
+    // Sum across every active week in the filter window. The breakdown list
+    // is bounded by the filter — a single-month filter shows ~4 rows, an
+    // FY filter shows up to ~52.
+    const pnlWindowActive = weeks.filter(isActiveWeek);
+    const revenueRows: DrilldownBreakdownRow[] = pnlWindowActive.map((w) => ({
+      label: w.week_ending,
+      value: w.cat_8_revenue,
+      format: "money" as const,
+    }));
+
+    drilldowns.revenue = {
+      formula_plain: "Sum of revenue (Category 8) period activity across every active week in the filter window.",
+      result: pnl.revenue,
+      inputs: [
+        { label: "Revenue (filter window)", value: pnl.revenue, format: "money" },
+      ],
+      computation: {
+        expression: "Σ |period_credit − period_debit|(cat 8) over weeks in window",
+        result: fmtUSD0(pnl.revenue),
+      },
+      breakdown: revenueRows.length > 0 ? {
+        title: "Per-Week Revenue (Filter Window)",
+        rows: revenueRows,
+        aggregate_label: "Total",
+        aggregate_value: pnl.revenue,
+        methodology_note: "Active weeks only. Each weekly value is |period_credit − period_debit| of all Category 8 (Revenue) accounts.",
+      } : undefined,
+    };
+
+    const _gross = pnl.revenue - pnl.djc;
+    drilldowns.gross_margin_pct = {
+      formula_plain: "(Revenue − Direct Job Costs) ÷ Revenue × 100.",
+      result: pnl.gross_margin_pct ?? 0,
+      inputs: [
+        { label: "Revenue",            value: pnl.revenue, format: "money" },
+        { label: "Direct Job Costs",   value: pnl.djc,     format: "money", note: "Σ period activity of Category 9 accounts" },
+      ],
+      computation: {
+        expression: `(${fmtUSD0(pnl.revenue)} − ${fmtUSD0(pnl.djc)}) ÷ ${fmtUSD0(pnl.revenue)} × 100`,
+        result: pnl.gross_margin_pct != null ? fmtPct1(pnl.gross_margin_pct) : "—",
+      },
+    };
+
+    drilldowns.operating_income = {
+      formula_plain: "Revenue − Direct Job Costs − Field Payroll − Overhead.",
+      result: pnl.operating_income,
+      inputs: [
+        { label: "Revenue",            value: pnl.revenue,        format: "money" },
+        { label: "Direct Job Costs",   value: pnl.djc,            format: "money" },
+        { label: "Field Payroll",      value: pnl.payroll_field,  format: "money", note: "Σ period activity of Category 6" },
+        { label: "Overhead",           value: pnl.overhead,       format: "money", note: "Σ period activity of Category 7" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(pnl.revenue)} − ${fmtUSD0(pnl.djc)} − ${fmtUSD0(pnl.payroll_field)} − ${fmtUSD0(pnl.overhead)}`,
+        result: fmtUSD0(pnl.operating_income),
+      },
+    };
+
+    drilldowns.operating_margin_pct = {
+      formula_plain: "Operating Income ÷ Revenue × 100. Accrual basis — see P&L Breakdown for cash-only view.",
+      result: pnl.operating_margin_pct ?? 0,
+      inputs: [
+        { label: "Operating Income",   value: pnl.operating_income, format: "money" },
+        { label: "Revenue",            value: pnl.revenue,          format: "money" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(pnl.operating_income)} ÷ ${fmtUSD0(pnl.revenue)} × 100`,
+        result: pnl.operating_margin_pct != null ? fmtPct1(pnl.operating_margin_pct) : "—",
+      },
+    };
+
+    // ─── Runway drilldowns (8-wk rolling) ───────────────────────────────────
+    const runwayBreakdownRow = (
+      w: WeekMetric,
+      pick: (w: WeekMetric) => number,
+    ): DrilldownBreakdownRow => ({
+      label: w.week_ending,
+      value: pick(w),
+      format: "money",
+    });
+
+    drilldowns.avg_weekly_collections = {
+      formula_plain: "8-week average of cash deposits to operating bank accounts (1021, 1027, 1120).",
+      result: runway.avg_weekly_collections,
+      inputs: [
+        { label: "Avg Weekly Collections (8-wk)", value: runway.avg_weekly_collections, format: "money" },
+      ],
+      computation: {
+        expression: "mean(weekly_cash_collected over last 8 active weeks)",
+        result: fmtUSD0(runway.avg_weekly_collections),
+      },
+      breakdown: {
+        title: "8-Week Average Calculation",
+        rows: last8Active.map((w) => runwayBreakdownRow(w, (x) => x.weekly_cash_collected)),
+        aggregate_label: "Average",
+        aggregate_value: runway.avg_weekly_collections,
+        methodology_note: "Active weeks only; weeks with no activity skipped. Per-week values are pre-summed across divisions in SQL.",
+      },
+      account_sources: sourcesForAccountList(ACCTS_CASH_COLLECTED),
+    };
+
+    drilldowns.avg_weekly_burn = {
+      formula_plain: "8-week average of (AP paid + Payroll paid + Overhead paid). Each leg is averaged separately and the three averages are summed.",
+      result: runway.avg_weekly_burn,
+      inputs: [
+        { label: "Avg Weekly AP Paid (8-wk)",       value: runway.avg_weekly_ap_paid,   format: "money", note: "Σ period_debit to account 2005, averaged" },
+        { label: "Avg Weekly Payroll Paid (8-wk)",  value: runway.avg_weekly_payroll,   format: "money", note: "Σ period_debit to 5101 + 5210 + 5220 + 5250 + 6080 + 6100, averaged" },
+        { label: "Avg Weekly Overhead Paid (8-wk)", value: runway.avg_weekly_overhead,  format: "money", note: "Σ period_debit of Category 7 accounts, averaged" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(runway.avg_weekly_ap_paid)} + ${fmtUSD0(runway.avg_weekly_payroll)} + ${fmtUSD0(runway.avg_weekly_overhead)}`,
+        result: fmtUSD0(runway.avg_weekly_burn),
+      },
+      breakdown: {
+        title: "8-Week Burn Calculation",
+        rows: last8Active.map((w) => runwayBreakdownRow(w, (x) => x.weekly_ap_paid + x.weekly_payroll_paid + x.weekly_overhead_paid)),
+        aggregate_label: "Average",
+        aggregate_value: runway.avg_weekly_burn,
+        methodology_note: "Active weeks only. Each per-week burn is summed across divisions in SQL before averaging — a payroll account spanning divisions 10/20/99 contributes one whole-company total per week, not three slices.",
+      },
+      account_sources: sourcesForAccountList([ACCT_AP, ...ACCTS_PAYROLL_PAID]),
+    };
+
+    const netCashFlowRunway = runway.avg_weekly_collections - runway.avg_weekly_burn;
+    drilldowns.net_cash_flow = {
+      formula_plain: "Avg Weekly Collections − Avg Weekly Burn. Positive = building cash; negative = draining cash.",
+      result: netCashFlowRunway,
+      inputs: [
+        { label: "Avg Weekly Collections (8-wk)", value: runway.avg_weekly_collections, format: "money" },
+        { label: "Avg Weekly Burn (8-wk)",        value: runway.avg_weekly_burn,        format: "money" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(runway.avg_weekly_collections)} − ${fmtUSD0(runway.avg_weekly_burn)}`,
+        result: `${netCashFlowRunway >= 0 ? "+" : "-"}${fmtUSD0(Math.abs(netCashFlowRunway))} / wk`,
+      },
+    };
+
+    drilldowns.weeks_of_runway = {
+      formula_plain: "Current Cash ÷ 8-week Avg Weekly Burn. Worst-case: how many weeks if collections stopped tomorrow.",
+      result: runway.weeks_of_runway ?? 0,
+      inputs: [
+        { label: "Current Cash",                value: runway.current_cash,    format: "money", note: anchor ? `Anchor week ${anchor.week_ending}` : undefined },
+        { label: "Avg Weekly Burn (8-wk)",      value: runway.avg_weekly_burn, format: "money" },
+      ],
+      computation: {
+        expression: `${fmtUSD0(runway.current_cash)} ÷ ${fmtUSD0(runway.avg_weekly_burn)}`,
+        result: runway.weeks_of_runway != null ? fmtWeeks2(runway.weeks_of_runway) : "—",
+      },
+    };
+
+    drilldowns.coast_weekly = {
+      formula_plain: "Equal to Avg Weekly Burn — the weekly collection target that keeps cash flat.",
+      result: runway.coast_weekly,
+      inputs: [
+        { label: "Avg Weekly Burn (8-wk)", value: runway.avg_weekly_burn, format: "money" },
+      ],
+      computation: {
+        expression: `coast = burn = ${fmtUSD0(runway.avg_weekly_burn)}`,
+        result: `${fmtUSD0(runway.coast_weekly)} / wk`,
+      },
+    };
+
+    const growthAdd = growthTargetPct * runway.avg_weekly_revenue;
+    drilldowns.grow_weekly = {
+      formula_plain: "Coast number + (growth target % × Avg Weekly Revenue). The weekly collection target to fund the configured growth bump.",
+      result: runway.grow_weekly,
+      inputs: [
+        { label: "Coast Number",                  value: runway.coast_weekly,          format: "money" },
+        { label: "Growth Target %",               value: growthTargetPct * 100,        format: "pct" },
+        { label: "Avg Weekly Revenue (8-wk)",     value: runway.avg_weekly_revenue,    format: "money" },
+        { label: "Growth Add ($/wk)",             value: growthAdd,                    format: "money", note: `${(growthTargetPct * 100).toFixed(0)}% × ${fmtUSD0(runway.avg_weekly_revenue)}` },
+      ],
+      computation: {
+        expression: `${fmtUSD0(runway.coast_weekly)} + (${(growthTargetPct * 100).toFixed(0)}% × ${fmtUSD0(runway.avg_weekly_revenue)}) = ${fmtUSD0(runway.coast_weekly)} + ${fmtUSD0(growthAdd)}`,
+        result: `${fmtUSD0(runway.grow_weekly)} / wk`,
+      },
+    };
+
     return NextResponse.json({
       weeks,
       months,
@@ -923,6 +1460,7 @@ export async function GET(req: NextRequest) {
       trend_series,
       trend_granularity,
       benchmarks: BENCHMARKS,
+      drilldowns,
     } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
