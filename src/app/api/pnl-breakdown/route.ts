@@ -16,10 +16,20 @@ export interface PnlAccount {
   division: string;
   description: string;
   total: number;
+  /** true = depreciation / internal allocation / other non-cash. Drives the
+   *  cash vs non-cash subgroup split in PnlBreakdownTable. */
+  is_non_cash: boolean;
 }
 
 export interface PnlCategoryGroup {
+  /** All activity, including non-cash — matches prior contract. */
   total: number;
+  /** Sum across accounts where is_non_cash = false. */
+  cash_total: number;
+  /** Sum across accounts where is_non_cash = true. Zero for categories
+   *  without any flagged accounts (Revenue always; expense cats when the
+   *  user hasn't flagged anything). */
+  non_cash_total: number;
   accounts: PnlAccount[];
 }
 
@@ -28,7 +38,11 @@ export interface PnlBreakdownResponse {
   direct_job_costs: PnlCategoryGroup;
   payroll_field: PnlCategoryGroup;
   overhead: PnlCategoryGroup;
+  /** Accrual basis — includes non-cash expenses. */
   operating_income: number;
+  /** Cash basis — revenue cash_total minus cash costs. Always >=
+   *  operating_income when any expense category has non-cash lines. */
+  cash_operating_income: number;
   fiscal_year: number;
   month: string | null;
 }
@@ -36,6 +50,7 @@ export interface PnlBreakdownResponse {
 // GET /api/pnl-breakdown?fiscal_year=2025[&month=2025-03]
 // Per-account signed P&L activity for categories 6,7,8,9, filtered by
 // weeks.fiscal_year (+ optional TO_CHAR(week_ending,'YYYY-MM') = month).
+// Also surfaces is_non_cash per account + cash/non-cash subtotals.
 export async function GET(req: NextRequest) {
   try {
     const sql = getDb();
@@ -59,12 +74,15 @@ export async function GET(req: NextRequest) {
     //   cat 8 (Revenue):                             period_credit − period_debit
     //   cat 6 / 7 / 9 (Payroll Field / OH / DJC):    period_debit − period_credit
     // HAVING hides dormant accounts that have zero activity in the window.
+    // is_non_cash is fetched alongside the other account fields so the JS
+    // bucketing below can split cash vs non-cash in one pass.
     const rows = await sql`
       SELECT
         ga.category_id,
         ga.account_no,
         ga.division,
         ga.description,
+        ga.is_non_cash,
         SUM(
           CASE
             WHEN ga.category_id = ${CAT.REVENUE} THEN wb.period_credit - wb.period_debit
@@ -78,16 +96,16 @@ export async function GET(req: NextRequest) {
         AND ga.is_active = true
         AND w.fiscal_year = ${fiscalYear}::int
         AND (${month}::text IS NULL OR TO_CHAR(w.week_ending, 'YYYY-MM') = ${month}::text)
-      GROUP BY ga.category_id, ga.account_no, ga.division, ga.description
+      GROUP BY ga.category_id, ga.account_no, ga.division, ga.description, ga.is_non_cash
       HAVING SUM(wb.period_debit + wb.period_credit) > 0
       ORDER BY ga.category_id ASC, signed_total DESC
     `;
 
     const groups: Record<number, PnlCategoryGroup> = {
-      [CAT.PAYROLL_FIELD]: { total: 0, accounts: [] },
-      [CAT.OVERHEAD]:      { total: 0, accounts: [] },
-      [CAT.REVENUE]:       { total: 0, accounts: [] },
-      [CAT.DJC]:           { total: 0, accounts: [] },
+      [CAT.PAYROLL_FIELD]: { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
+      [CAT.OVERHEAD]:      { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
+      [CAT.REVENUE]:       { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
+      [CAT.DJC]:           { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
     };
 
     // Display values are positive magnitudes — the category's sign is
@@ -97,14 +115,21 @@ export async function GET(req: NextRequest) {
     for (const r of rows) {
       const cid = Number(r.category_id);
       const displayTotal = Math.abs(parseFloat(String(r.signed_total)));
+      const isNonCash = Boolean(r.is_non_cash);
       if (!groups[cid]) continue;
       groups[cid].accounts.push({
         account_no: Number(r.account_no),
         division: String(r.division ?? ""),
         description: String(r.description ?? ""),
         total: displayTotal,
+        is_non_cash: isNonCash,
       });
       groups[cid].total += displayTotal;
+      if (isNonCash) {
+        groups[cid].non_cash_total += displayTotal;
+      } else {
+        groups[cid].cash_total += displayTotal;
+      }
     }
 
     // Re-sort per-category by display value (desc) — the SQL ORDER BY was
@@ -113,18 +138,26 @@ export async function GET(req: NextRequest) {
       groups[cid].accounts.sort((a, b) => b.total - a.total);
     }
 
-    const revenue         = groups[CAT.REVENUE];
+    const revenue          = groups[CAT.REVENUE];
     const direct_job_costs = groups[CAT.DJC];
-    const payroll_field   = groups[CAT.PAYROLL_FIELD];
-    const overhead        = groups[CAT.OVERHEAD];
+    const payroll_field    = groups[CAT.PAYROLL_FIELD];
+    const overhead         = groups[CAT.OVERHEAD];
 
-    // Op Income = Revenue − all cost buckets. Each category total is a
-    // positive magnitude, so subtraction reflects accounting direction.
+    // Op Income = Revenue − all cost buckets (accrual, includes non-cash).
     const operating_income =
       revenue.total -
       direct_job_costs.total -
       payroll_field.total -
       overhead.total;
+
+    // Cash Op Income strips non-cash expenses out of the cost side. Revenue
+    // uses its cash_total — which equals revenue.total whenever no revenue
+    // accounts are flagged non_cash (the normal case).
+    const cash_operating_income =
+      revenue.cash_total -
+      direct_job_costs.cash_total -
+      payroll_field.cash_total -
+      overhead.cash_total;
 
     const body: PnlBreakdownResponse = {
       revenue,
@@ -132,6 +165,7 @@ export async function GET(req: NextRequest) {
       payroll_field,
       overhead,
       operating_income,
+      cash_operating_income,
       fiscal_year: fiscalYear,
       month,
     };
