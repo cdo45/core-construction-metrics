@@ -16,9 +16,13 @@ export interface PnlAccount {
   division: string;
   description: string;
   total: number;
-  /** true = depreciation / internal allocation / other non-cash. Drives the
-   *  cash vs non-cash subgroup split in PnlBreakdownTable. */
+  /** true = depreciation / internal allocation / other non-cash. */
   is_non_cash: boolean;
+  /** true = internal cost transfer (e.g. 6050 ALLOCATED EQ. COSTS). The
+   *  underlying cash was already spent against other accounts, so these
+   *  are display-only and do NOT flow into the cash-op-income add-back.
+   *  Only meaningful when is_non_cash is true. */
+  is_allocation: boolean;
 }
 
 export interface PnlCategoryGroup {
@@ -26,10 +30,15 @@ export interface PnlCategoryGroup {
   total: number;
   /** Sum across accounts where is_non_cash = false. */
   cash_total: number;
-  /** Sum across accounts where is_non_cash = true. Zero for categories
-   *  without any flagged accounts (Revenue always; expense cats when the
-   *  user hasn't flagged anything). */
+  /** Sum across accounts where is_non_cash = true. Still equals
+   *  depreciation_total + allocation_total for backwards compat. */
   non_cash_total: number;
+  /** True non-cash (is_non_cash = true AND is_allocation = false).
+   *  Drives the cash_operating_income add-back. */
+  depreciation_total: number;
+  /** Internal transfers (is_non_cash = true AND is_allocation = true).
+   *  Display-only; never added back. */
+  allocation_total: number;
   accounts: PnlAccount[];
 }
 
@@ -40,8 +49,10 @@ export interface PnlBreakdownResponse {
   overhead: PnlCategoryGroup;
   /** Accrual basis — includes non-cash expenses. */
   operating_income: number;
-  /** Cash basis — revenue cash_total minus cash costs. Always >=
-   *  operating_income when any expense category has non-cash lines. */
+  /** Cash basis. Adds back DEPRECIATION only (not allocations):
+   *    cash_operating_income = operating_income + Σ depreciation_total
+   *  Allocations stay subtracted because their underlying cash was
+   *  already spent via other accounts. */
   cash_operating_income: number;
   fiscal_year: number;
   month: string | null;
@@ -74,8 +85,9 @@ export async function GET(req: NextRequest) {
     //   cat 8 (Revenue):                             period_credit − period_debit
     //   cat 6 / 7 / 9 (Payroll Field / OH / DJC):    period_debit − period_credit
     // HAVING hides dormant accounts that have zero activity in the window.
-    // is_non_cash is fetched alongside the other account fields so the JS
-    // bucketing below can split cash vs non-cash in one pass.
+    // is_non_cash + is_allocation are fetched alongside the other fields so
+    // the JS bucketing below can split cash / depreciation / allocation
+    // in one pass.
     const rows = await sql`
       SELECT
         ga.category_id,
@@ -83,6 +95,7 @@ export async function GET(req: NextRequest) {
         ga.division,
         ga.description,
         ga.is_non_cash,
+        ga.is_allocation,
         SUM(
           CASE
             WHEN ga.category_id = ${CAT.REVENUE} THEN wb.period_credit - wb.period_debit
@@ -96,16 +109,17 @@ export async function GET(req: NextRequest) {
         AND ga.is_active = true
         AND w.fiscal_year = ${fiscalYear}::int
         AND (${month}::text IS NULL OR TO_CHAR(w.week_ending, 'YYYY-MM') = ${month}::text)
-      GROUP BY ga.category_id, ga.account_no, ga.division, ga.description, ga.is_non_cash
+      GROUP BY ga.category_id, ga.account_no, ga.division, ga.description,
+               ga.is_non_cash, ga.is_allocation
       HAVING SUM(wb.period_debit + wb.period_credit) > 0
       ORDER BY ga.category_id ASC, signed_total DESC
     `;
 
     const groups: Record<number, PnlCategoryGroup> = {
-      [CAT.PAYROLL_FIELD]: { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
-      [CAT.OVERHEAD]:      { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
-      [CAT.REVENUE]:       { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
-      [CAT.DJC]:           { total: 0, cash_total: 0, non_cash_total: 0, accounts: [] },
+      [CAT.PAYROLL_FIELD]: { total: 0, cash_total: 0, non_cash_total: 0, depreciation_total: 0, allocation_total: 0, accounts: [] },
+      [CAT.OVERHEAD]:      { total: 0, cash_total: 0, non_cash_total: 0, depreciation_total: 0, allocation_total: 0, accounts: [] },
+      [CAT.REVENUE]:       { total: 0, cash_total: 0, non_cash_total: 0, depreciation_total: 0, allocation_total: 0, accounts: [] },
+      [CAT.DJC]:           { total: 0, cash_total: 0, non_cash_total: 0, depreciation_total: 0, allocation_total: 0, accounts: [] },
     };
 
     // Display values are positive magnitudes — the category's sign is
@@ -116,6 +130,10 @@ export async function GET(req: NextRequest) {
       const cid = Number(r.category_id);
       const displayTotal = Math.abs(parseFloat(String(r.signed_total)));
       const isNonCash = Boolean(r.is_non_cash);
+      // is_allocation only matters when is_non_cash is true; coerce to
+      // false otherwise so a stray flag on a cash row can't leak into the
+      // allocation bucket.
+      const isAllocation = isNonCash && Boolean(r.is_allocation);
       if (!groups[cid]) continue;
       groups[cid].accounts.push({
         account_no: Number(r.account_no),
@@ -123,10 +141,16 @@ export async function GET(req: NextRequest) {
         description: String(r.description ?? ""),
         total: displayTotal,
         is_non_cash: isNonCash,
+        is_allocation: isAllocation,
       });
       groups[cid].total += displayTotal;
       if (isNonCash) {
         groups[cid].non_cash_total += displayTotal;
+        if (isAllocation) {
+          groups[cid].allocation_total += displayTotal;
+        } else {
+          groups[cid].depreciation_total += displayTotal;
+        }
       } else {
         groups[cid].cash_total += displayTotal;
       }
@@ -150,14 +174,17 @@ export async function GET(req: NextRequest) {
       payroll_field.total -
       overhead.total;
 
-    // Cash Op Income strips non-cash expenses out of the cost side. Revenue
-    // uses its cash_total — which equals revenue.total whenever no revenue
-    // accounts are flagged non_cash (the normal case).
-    const cash_operating_income =
-      revenue.cash_total -
-      direct_job_costs.cash_total -
-      payroll_field.cash_total -
-      overhead.cash_total;
+    // Cash Op Income adds back DEPRECIATION only. Allocations are internal
+    // transfers whose underlying cash was already spent via other accounts,
+    // so adding them back would overstate cash. Revenue's own depreciation_
+    // total is effectively zero for normal data — included for symmetry.
+    const depreciationAddBack =
+      revenue.depreciation_total +
+      direct_job_costs.depreciation_total +
+      payroll_field.depreciation_total +
+      overhead.depreciation_total;
+
+    const cash_operating_income = operating_income + depreciationAddBack;
 
     const body: PnlBreakdownResponse = {
       revenue,
