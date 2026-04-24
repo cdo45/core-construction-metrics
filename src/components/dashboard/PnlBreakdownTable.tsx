@@ -13,8 +13,11 @@ import InfoTooltip from "@/components/ui/InfoTooltip";
 
 const SORT_KEY_PREFIX = "tablesort:PnlBreakdownTable";
 
-const NON_CASH_HELP =
-  "These are non-cash expenses — depreciation, internal cost allocations, etc. They reduce reported profit but don't reduce actual cash.";
+const DEPRECIATION_HELP =
+  "True non-cash expenses (depreciation, amortization, accruals). They reduce reported profit but don't reduce actual cash — so they're added back to get Cash from Operations.";
+
+const ALLOCATION_HELP =
+  "Internal cost transfers (e.g. allocating shop equipment costs to field jobs). The underlying cash was already spent elsewhere, so these are shown for transparency but do NOT add back to cash.";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -41,35 +44,46 @@ function fmtSigned(n: number, showSign: "pos" | "neg"): string {
 }
 
 // ─── Account row ─────────────────────────────────────────────────────────────
-// Shared render for both the flat-list case and the split cash / non-cash
-// subgroups. `muted` dims the row for the non-cash subgroup.
+// Shared render for cash / depreciation / allocation subgroups.
+//   tone = "normal"     → cash rows, full colour
+//   tone = "muted"      → depreciation rows, italic grey
+//   tone = "very-muted" → allocation rows, lighter grey italic + smaller font
 
 function AccountRow({
   acct,
   display,
-  muted,
+  tone,
 }: {
   acct: PnlAccount;
   display: "revenue" | "cost";
-  muted: boolean;
+  tone: "normal" | "muted" | "very-muted";
 }) {
-  const mutedCls = muted ? "italic text-gray-500" : "";
+  const muted = tone !== "normal";
+  const sizeCls = tone === "very-muted" ? "text-[10px]" : "text-xs";
+  const italicCls = muted ? "italic" : "";
+
+  const acctColor =
+    tone === "very-muted" ? "text-gray-300"
+    : tone === "muted"    ? "text-gray-400"
+    :                        "text-gray-500";
+  const divColor =
+    tone === "very-muted" ? "text-gray-200"
+    : tone === "muted"    ? "text-gray-300"
+    :                        "text-gray-400";
+  const descColor =
+    tone === "very-muted" ? "text-gray-400"
+    : tone === "muted"    ? "text-gray-500"
+    :                        "text-gray-700";
   const amountCls = muted
-    ? "text-gray-500 italic"
-    : display === "cost"
-      ? "text-red-700"
-      : "text-gray-900";
+    ? (tone === "very-muted" ? "text-gray-400 italic" : "text-gray-500 italic")
+    : display === "cost" ? "text-red-700"
+    : "text-gray-900";
+
   return (
-    <tr className="border-t border-gray-100 first:border-t-0">
-      <td className={`px-4 py-2 font-mono w-24 ${muted ? "text-gray-400" : "text-gray-500"}`}>
-        {acct.account_no}
-      </td>
-      <td className={`px-2 py-2 font-mono w-16 ${muted ? "text-gray-300" : "text-gray-400"}`}>
-        {acct.division}
-      </td>
-      <td className={`px-2 py-2 ${muted ? "text-gray-500" : "text-gray-700"} ${mutedCls}`}>
-        {acct.description}
-      </td>
+    <tr className={`border-t border-gray-100 first:border-t-0 ${sizeCls}`}>
+      <td className={`px-4 py-2 font-mono w-24 ${acctColor}`}>{acct.account_no}</td>
+      <td className={`px-2 py-2 font-mono w-16 ${divColor}`}>{acct.division}</td>
+      <td className={`px-2 py-2 ${descColor} ${italicCls}`}>{acct.description}</td>
       <td className={`px-4 py-2 text-right tabular-nums ${amountCls}`}>
         {display === "cost" ? fmtSigned(acct.total, "pos") : fmtMoney(acct.total)}
       </td>
@@ -116,16 +130,22 @@ function CategoryRow({
     `${SORT_KEY_PREFIX}:${storageSlug}`,
   );
 
-  // Split the sorted list into cash vs non-cash preserving the user's
-  // chosen ordering within each subgroup. Only split visually when the
-  // category actually has non-cash activity.
+  // Split the sorted list into cash / depreciation / allocation buckets.
+  // Preserves the user's chosen ordering within each subgroup. The table
+  // only splits visually when at least one non-cash line exists.
   const hasNonCash = group.non_cash_total !== 0;
+  const hasDepreciation = group.depreciation_total !== 0;
+  const hasAllocation = group.allocation_total !== 0;
   const cashRows = useMemo(
     () => sortedData.filter((a) => !a.is_non_cash),
     [sortedData],
   );
-  const nonCashRows = useMemo(
-    () => sortedData.filter((a) => a.is_non_cash),
+  const depreciationRows = useMemo(
+    () => sortedData.filter((a) => a.is_non_cash && !a.is_allocation),
+    [sortedData],
+  );
+  const allocationRows = useMemo(
+    () => sortedData.filter((a) => a.is_non_cash && a.is_allocation),
     [sortedData],
   );
 
@@ -189,27 +209,50 @@ function CategoryRow({
                     </td>
                   </tr>
                   {cashRows.map((acct) => (
-                    <AccountRow key={`cash-${acct.account_no}|${acct.division}`} acct={acct} display={display} muted={false} />
+                    <AccountRow key={`cash-${acct.account_no}|${acct.division}`} acct={acct} display={display} tone="normal" />
                   ))}
 
-                  <tr className="bg-gray-100/40 border-t border-gray-200">
-                    <td colSpan={3} className="px-4 py-1.5">
-                      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 font-semibold italic">
-                        Non-Cash / Allocations
-                        <InfoTooltip text={NON_CASH_HELP} align="left" />
-                      </span>
-                    </td>
-                    <td className="px-4 py-1.5 text-right tabular-nums text-[11px] font-semibold text-gray-500 italic">
-                      {display === "cost" ? fmtSigned(group.non_cash_total, "pos") : fmtMoney(group.non_cash_total)}
-                    </td>
-                  </tr>
-                  {nonCashRows.map((acct) => (
-                    <AccountRow key={`nc-${acct.account_no}|${acct.division}`} acct={acct} display={display} muted={true} />
-                  ))}
+                  {hasDepreciation && (
+                    <>
+                      <tr className="bg-gray-100/40 border-t border-gray-200">
+                        <td colSpan={3} className="px-4 py-1.5">
+                          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 font-semibold italic">
+                            Non-Cash Expenses (add-back eligible)
+                            <InfoTooltip text={DEPRECIATION_HELP} align="left" />
+                          </span>
+                        </td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-[11px] font-semibold text-gray-500 italic">
+                          {display === "cost" ? fmtSigned(group.depreciation_total, "pos") : fmtMoney(group.depreciation_total)}
+                        </td>
+                      </tr>
+                      {depreciationRows.map((acct) => (
+                        <AccountRow key={`dep-${acct.account_no}|${acct.division}`} acct={acct} display={display} tone="muted" />
+                      ))}
+                    </>
+                  )}
+
+                  {hasAllocation && (
+                    <>
+                      <tr className="bg-gray-100/30 border-t border-gray-200">
+                        <td colSpan={3} className="px-4 py-1.5">
+                          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-400 font-semibold italic">
+                            Internal Allocations (display only)
+                            <InfoTooltip text={ALLOCATION_HELP} align="left" />
+                          </span>
+                        </td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-[11px] font-semibold text-gray-400 italic">
+                          {display === "cost" ? fmtSigned(group.allocation_total, "pos") : fmtMoney(group.allocation_total)}
+                        </td>
+                      </tr>
+                      {allocationRows.map((acct) => (
+                        <AccountRow key={`alloc-${acct.account_no}|${acct.division}`} acct={acct} display={display} tone="very-muted" />
+                      ))}
+                    </>
+                  )}
                 </>
               ) : (
                 sortedData.map((acct) => (
-                  <AccountRow key={`${acct.account_no}|${acct.division}`} acct={acct} display={display} muted={false} />
+                  <AccountRow key={`${acct.account_no}|${acct.division}`} acct={acct} display={display} tone="normal" />
                 ))
               )}
             </tbody>
@@ -221,16 +264,23 @@ function CategoryRow({
 }
 
 // ─── Bottom summary ──────────────────────────────────────────────────────────
-// Shows accrual operating income, the non-cash add-back (sum of non-cash
-// totals across expense cats; revenue almost never has non-cash lines), and
-// the resulting cash-from-operations. Matches cash_operating_income from
-// the API within a penny.
+// Shows accrual operating income, the DEPRECIATION add-back (only true
+// non-cash — allocations are excluded because their underlying cash was
+// already spent elsewhere), and the resulting cash-from-operations.
+// Matches cash_operating_income from the API within a penny. When a
+// category has allocations, they're surfaced as a footnote so the reader
+// sees why they're not in the add-back.
 
 function BottomSummary({ data }: { data: PnlBreakdownResponse }) {
-  const nonCashAddBack =
-    data.direct_job_costs.non_cash_total +
-    data.payroll_field.non_cash_total +
-    data.overhead.non_cash_total;
+  const depreciationAddBack =
+    data.direct_job_costs.depreciation_total +
+    data.payroll_field.depreciation_total +
+    data.overhead.depreciation_total;
+
+  const allocationNote =
+    data.direct_job_costs.allocation_total +
+    data.payroll_field.allocation_total +
+    data.overhead.allocation_total;
 
   const opIncomeColor =
     data.operating_income >= 0 ? "text-green-700" : "text-red-700";
@@ -247,14 +297,14 @@ function BottomSummary({ data }: { data: PnlBreakdownResponse }) {
       </div>
       <div className="flex items-center justify-between text-gray-600">
         <span className="inline-flex items-center gap-1">
-          + Non-Cash Add-back
+          + Depreciation add-back
           <InfoTooltip
-            text="Adding non-cash expenses (depreciation, internal allocations) back to accrual income to approximate the cash impact. Operating Income + this = Cash from Operations."
+            text="Adding true non-cash expenses (depreciation, amortization) back to accrual income to approximate cash impact. Internal allocations are NOT added back because their underlying cash was already spent through other accounts."
             align="left"
           />
         </span>
         <span className="font-semibold tabular-nums">
-          {nonCashAddBack === 0 ? fmtMoney(0) : `+${fmtMoney(nonCashAddBack)}`}
+          {depreciationAddBack === 0 ? fmtMoney(0) : `+${fmtMoney(depreciationAddBack)}`}
         </span>
       </div>
       <div className="border-t border-gray-200 mt-1 pt-1 flex items-center justify-between">
@@ -263,6 +313,11 @@ function BottomSummary({ data }: { data: PnlBreakdownResponse }) {
           {fmtMoney(data.cash_operating_income)}
         </span>
       </div>
+      {allocationNote !== 0 && (
+        <p className="text-[11px] text-gray-400 italic mt-1">
+          Internal allocations ({fmtMoney(allocationNote)}) are shown in the breakdown for reference but are not added back.
+        </p>
+      )}
     </div>
   );
 }
