@@ -141,6 +141,70 @@ export interface RunwaySummary {
   anchor_week_ending: string | null;
 }
 
+// ─── Trend series (sparklines) ───────────────────────────────────────────────
+// Per-metric time-series used by the sparkline renderer next to each KPI
+// card. Granularity follows the filter:
+//   month set        → one point per active week in that month (~4-5 pts)
+//   fiscal_year set  → one point per month in that FY (up to 12 pts)
+//   no filter        → one point per month in the latest FY (default)
+//
+// Per-period values:
+//   Balance-sheet (cash/ar/ap/net_liquidity/working_capital): end-of-period
+//     snapshot from the LAST active week in the period.
+//   P&L (revenue, margins): SUM of per-week period activity within the
+//     period; margins derived from those summed totals.
+//   Ratios (current/quick/ar_to_ap): taken from the last active week's
+//     pre-computed ratio — they already reflect EOM snapshots.
+//   Weeks (runway/coverage/payroll_runway): last active week's values.
+
+export interface TrendPoint {
+  period_label: string;
+  value: number;
+}
+
+export interface TrendSeries {
+  cash: TrendPoint[];
+  ar: TrendPoint[];
+  ap: TrendPoint[];
+  net_liquidity: TrendPoint[];
+  working_capital: TrendPoint[]; // cash + ar − ap
+  current_ratio: TrendPoint[];
+  quick_ratio: TrendPoint[];
+  ar_to_ap: TrendPoint[];
+  weeks_of_runway: TrendPoint[];
+  cash_coverage_weeks: TrendPoint[];
+  payroll_runway_wks: TrendPoint[];
+  revenue: TrendPoint[];
+  gross_margin_pct: TrendPoint[];
+  operating_margin_pct: TrendPoint[];
+  // Runway-section series (per-period sums of weekly cash flows).
+  weekly_collections: TrendPoint[];
+  weekly_burn: TrendPoint[];
+  net_cash_flow: TrendPoint[];
+  coast_weekly: TrendPoint[]; // = weekly_burn (shown as weekly rate)
+  grow_weekly: TrendPoint[];  // coast + growth_target * weekly revenue
+}
+
+export interface Benchmarks {
+  current_ratio: number;
+  quick_ratio: number;
+  ar_to_ap: number;
+  weeks_of_runway: number;
+  cash_coverage_weeks: number;
+  payroll_runway_wks: number;
+}
+
+// Industry-standard thresholds used as the dotted reference line on
+// ratio / weeks sparklines. Conservative values; user can tune later.
+const BENCHMARKS: Benchmarks = {
+  current_ratio: 1.5,
+  quick_ratio: 1.0,
+  ar_to_ap: 1.0,
+  weeks_of_runway: 12,
+  cash_coverage_weeks: 4,
+  payroll_runway_wks: 8,
+};
+
 export interface MonthMetric {
   month: string; // "YYYY-MM"
   avg_cat_1_cash: number;
@@ -185,6 +249,11 @@ export interface MetricsResponse {
   loc_limit: number;
   loc_drawn: number;
   loc_undrawn: number;
+  // Per-metric time-series for sparklines. Granularity reflects the
+  // active filter (see TrendSeries docs above).
+  trend_series: TrendSeries;
+  trend_granularity: "week" | "month";
+  benchmarks: Benchmarks;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -705,6 +774,138 @@ export async function GET(req: NextRequest) {
     const loc_drawn = Math.abs(locAcctEnd);
     const loc_undrawn = Math.max(0, LOC_LIMIT - loc_drawn);
 
+    // ── Trend series ────────────────────────────────────────────────────────
+    // Granularity: monthFilter → weekly; else monthly. If neither filter was
+    // supplied and we're implicitly showing "everything", still default to
+    // monthly so the sparkline has a readable point count.
+    const trend_granularity: "week" | "month" = monthFilter ? "week" : "month";
+
+    // Short month-day label for weekly sparkline points ("Jan 4").
+    const weekLabel = (iso: string): string => {
+      const [, m, d] = iso.split("-");
+      const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${monthNames[parseInt(m, 10) - 1]} ${parseInt(d, 10)}`;
+    };
+    const monthLabel = (ym: string): string => {
+      const [y, m] = ym.split("-");
+      const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${monthNames[parseInt(m, 10) - 1]} ${y}`;
+    };
+
+    // Per-week runway (weeks_of_runway / cash_coverage / payroll_runway)
+    // uses the OVERALL avg_weekly_burn as the divisor. A fully per-period
+    // burn would add noise — the sparkline reads "how does runway move as
+    // cash moves" with a stable burn denominator.
+    const runwayDivisor = avg_weekly_burn;
+
+    const trend_series: TrendSeries = {
+      cash: [], ar: [], ap: [], net_liquidity: [], working_capital: [],
+      current_ratio: [], quick_ratio: [], ar_to_ap: [],
+      weeks_of_runway: [], cash_coverage_weeks: [], payroll_runway_wks: [],
+      revenue: [], gross_margin_pct: [], operating_margin_pct: [],
+      weekly_collections: [], weekly_burn: [], net_cash_flow: [],
+      coast_weekly: [], grow_weekly: [],
+    };
+
+    if (trend_granularity === "week") {
+      // One point per active week in the filter window.
+      for (const w of weeks) {
+        if (!isActiveWeek(w)) continue;
+        const label = weekLabel(w.week_ending);
+        trend_series.cash.push({ period_label: label, value: w.cat_1_cash });
+        trend_series.ar.push({ period_label: label, value: w.cat_2_ar });
+        trend_series.ap.push({ period_label: label, value: w.ap });
+        trend_series.net_liquidity.push({ period_label: label, value: w.net_liquidity });
+        trend_series.working_capital.push({ period_label: label, value: w.cat_1_cash + w.cat_2_ar - w.ap });
+        trend_series.current_ratio.push({ period_label: label, value: w.current_ratio ?? 0 });
+        trend_series.quick_ratio.push({ period_label: label, value: w.quick_ratio ?? 0 });
+        trend_series.ar_to_ap.push({ period_label: label, value: w.ar_to_ap ?? 0 });
+        trend_series.weeks_of_runway.push({
+          period_label: label,
+          value: runwayDivisor > 0 ? w.cat_1_cash / runwayDivisor : 0,
+        });
+        trend_series.cash_coverage_weeks.push({ period_label: label, value: w.cash_coverage_weeks ?? 0 });
+        trend_series.payroll_runway_wks.push({ period_label: label, value: w.payroll_runway_wks ?? 0 });
+        trend_series.revenue.push({ period_label: label, value: w.cat_8_revenue });
+        trend_series.gross_margin_pct.push({ period_label: label, value: w.gross_margin_pct ?? 0 });
+        trend_series.operating_margin_pct.push({ period_label: label, value: w.operating_margin_pct ?? 0 });
+
+        // Runway-section per-week series.
+        const weeklyBurn = w.weekly_ap_paid + w.weekly_payroll_paid + w.weekly_overhead_paid;
+        trend_series.weekly_collections.push({ period_label: label, value: w.weekly_cash_collected });
+        trend_series.weekly_burn.push({ period_label: label, value: weeklyBurn });
+        trend_series.net_cash_flow.push({ period_label: label, value: w.weekly_cash_collected - weeklyBurn });
+        trend_series.coast_weekly.push({ period_label: label, value: weeklyBurn });
+        trend_series.grow_weekly.push({
+          period_label: label,
+          value: weeklyBurn + growthTargetPct * w.weekly_revenue,
+        });
+      }
+    } else {
+      // Monthly: group active weeks by YYYY-MM. BS / ratios / weeks take the
+      // last active week's value; revenue sums period activity; margins
+      // derive from summed P&L.
+      const byMonth = new Map<string, WeekMetric[]>();
+      for (const w of weeks) {
+        if (!isActiveWeek(w)) continue;
+        const ym = w.week_ending.slice(0, 7);
+        if (!byMonth.has(ym)) byMonth.set(ym, []);
+        byMonth.get(ym)!.push(w);
+      }
+      const months = Array.from(byMonth.keys()).sort();
+      for (const ym of months) {
+        const group = byMonth.get(ym)!; // at least one active week
+        const eom = group[group.length - 1]; // last active week of the month
+        const label = monthLabel(ym);
+
+        // Sums for revenue + margin derivation
+        let sumRevenue = 0, sumDjc = 0, sumPayroll = 0, sumOverhead = 0;
+        for (const w of group) {
+          sumRevenue  += w.cat_8_revenue;
+          sumDjc      += w.cat_9_djc;
+          sumPayroll  += w.cat_6_payroll_field;
+          sumOverhead += w.cat_7_overhead;
+        }
+        const opIncome = sumRevenue - sumDjc - sumPayroll - sumOverhead;
+        const gmPct = sumRevenue !== 0 ? ((sumRevenue - sumDjc) / sumRevenue) * 100 : 0;
+        const omPct = sumRevenue !== 0 ? (opIncome / sumRevenue) * 100 : 0;
+
+        trend_series.cash.push({ period_label: label, value: eom.cat_1_cash });
+        trend_series.ar.push({ period_label: label, value: eom.cat_2_ar });
+        trend_series.ap.push({ period_label: label, value: eom.ap });
+        trend_series.net_liquidity.push({ period_label: label, value: eom.net_liquidity });
+        trend_series.working_capital.push({ period_label: label, value: eom.cat_1_cash + eom.cat_2_ar - eom.ap });
+        trend_series.current_ratio.push({ period_label: label, value: eom.current_ratio ?? 0 });
+        trend_series.quick_ratio.push({ period_label: label, value: eom.quick_ratio ?? 0 });
+        trend_series.ar_to_ap.push({ period_label: label, value: eom.ar_to_ap ?? 0 });
+        trend_series.weeks_of_runway.push({
+          period_label: label,
+          value: runwayDivisor > 0 ? eom.cat_1_cash / runwayDivisor : 0,
+        });
+        trend_series.cash_coverage_weeks.push({ period_label: label, value: eom.cash_coverage_weeks ?? 0 });
+        trend_series.payroll_runway_wks.push({ period_label: label, value: eom.payroll_runway_wks ?? 0 });
+        trend_series.revenue.push({ period_label: label, value: sumRevenue });
+        trend_series.gross_margin_pct.push({ period_label: label, value: gmPct });
+        trend_series.operating_margin_pct.push({ period_label: label, value: omPct });
+
+        // Runway-section monthly sums + derived coast/grow.
+        let sumCollected = 0, sumBurn = 0, sumWeeklyRev = 0;
+        for (const w of group) {
+          sumCollected += w.weekly_cash_collected;
+          sumBurn      += w.weekly_ap_paid + w.weekly_payroll_paid + w.weekly_overhead_paid;
+          sumWeeklyRev += w.weekly_revenue;
+        }
+        trend_series.weekly_collections.push({ period_label: label, value: sumCollected });
+        trend_series.weekly_burn.push({ period_label: label, value: sumBurn });
+        trend_series.net_cash_flow.push({ period_label: label, value: sumCollected - sumBurn });
+        trend_series.coast_weekly.push({ period_label: label, value: sumBurn });
+        trend_series.grow_weekly.push({
+          period_label: label,
+          value: sumBurn + growthTargetPct * sumWeeklyRev,
+        });
+      }
+    }
+
     return NextResponse.json({
       weeks,
       months,
@@ -713,6 +914,9 @@ export async function GET(req: NextRequest) {
       loc_limit: LOC_LIMIT,
       loc_drawn,
       loc_undrawn,
+      trend_series,
+      trend_granularity,
+      benchmarks: BENCHMARKS,
     } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
