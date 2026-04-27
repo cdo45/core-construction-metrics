@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import CategoryEditor from "@/components/setup/CategoryEditor";
 import ExcludedAccountsTable from "@/components/setup/ExcludedAccountsTable";
+import AdminTools from "@/components/setup/AdminTools";
 import { useTableSort, type SortSpec } from "@/hooks/useTableSort";
 import SortableHeader from "@/components/ui/SortableHeader";
 
@@ -844,6 +845,7 @@ export default function SetupPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-8">
+          <AdminTools />
           <ExcludedAccountsTable onActivated={fetchData} refreshKey={excludedRefresh} />
           <CategoryEditor
             accounts={accounts}
