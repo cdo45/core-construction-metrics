@@ -185,7 +185,17 @@ export async function POST(req: NextRequest) {
       rowsImported++;
     }
 
-    console.log('[confirm] processing', rowsImported, 'rows across', affectedWeeks.size, 'weeks');
+    console.log(
+      `[confirm] received ${rows.length}, inserted ${rowsImported}, deduped ${rowsDuplicate}, excluded ${rowsOutOfScope} (across ${affectedWeeks.size} weeks)`
+    );
+    // Per-week breakdown so multi-chunk uploads to the same week are auditable.
+    const perWeekCounts = new Map<string, number>();
+    for (const b of buckets.values()) {
+      perWeekCounts.set(b.weekEnding, (perWeekCounts.get(b.weekEnding) ?? 0) + b.rowsToInsert.length);
+    }
+    for (const [wk, n] of Array.from(perWeekCounts).sort()) {
+      console.log(`[confirm] week ${wk}: inserting ${n} new rows`);
+    }
 
     // ── Persist: bulk-insert all transactions in one statement ───────────────
     const txWeekEndings: string[] = [];
@@ -321,6 +331,20 @@ export async function POST(req: NextRequest) {
         )
       `;
       console.log('[confirm] step 5 DONE');
+
+      // Post-insert sanity: count weekly_transactions rows per affected week
+      // and log alongside the per-bucket inserted count. Any divergence
+      // signals a silent drop (dedupe collision, FK mismatch, etc.).
+      const postCounts = (await sql`
+        SELECT week_ending::text AS week_ending, COUNT(*)::int AS n
+        FROM weekly_transactions
+        WHERE week_ending = ANY(${Array.from(affectedWeeks)}::date[])
+        GROUP BY week_ending
+        ORDER BY week_ending
+      `) as Array<{ week_ending: string; n: number }>;
+      for (const r of postCounts) {
+        console.log(`[confirm] week ${r.week_ending}: total weekly_transactions rows now ${r.n}`);
+      }
     }
 
     // ── Batch-load existing beg_balances for all (week, glId) pairs ──────────
@@ -550,13 +574,26 @@ export async function POST(req: NextRequest) {
 
     console.log('[confirm] done');
 
+    // Final per-week totals after the insert — the import UI can render
+    // these alongside rowsImported so a multi-chunk same-week upload is
+    // auditable end-to-end.
+    const finalWeekTotals = (await sql`
+      SELECT week_ending::text AS week_ending, COUNT(*)::int AS n
+      FROM weekly_transactions
+      WHERE week_ending = ANY(${Array.from(affectedWeeks)}::date[])
+      GROUP BY week_ending
+      ORDER BY week_ending
+    `) as Array<{ week_ending: string; n: number }>;
+
     return NextResponse.json({
       success: true,
+      rowsReceived: rows.length,
       rowsImported,
       rowsSkipped: rowsDuplicate + rowsOutOfScope,
       rowsDuplicate,
       rowsOutOfScope,
       weeksCommitted: weeksTouched,
+      perWeekTotals: finalWeekTotals,
     });
   } catch (error: any) {
     const errorInfo = {
