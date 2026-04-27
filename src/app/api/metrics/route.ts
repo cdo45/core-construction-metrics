@@ -237,6 +237,19 @@ export interface PnlSummary {
   operating_margin_pct: number | null;   // operating_income / revenue
 }
 
+export interface AccountSnapshot {
+  account_no: number;
+  division: string | null;
+  description: string;
+  category_id: number | null;
+  normal_balance: "debit" | "credit";
+  /** Signed end_balance at the anchor week (assets +, liabilities −). */
+  end_balance: number;
+  /** Period activity at the anchor week — same column the cards aggregate. */
+  period_debit: number;
+  period_credit: number;
+}
+
 export interface MetricsResponse {
   weeks: WeekMetric[];
   months: MonthMetric[];
@@ -254,6 +267,13 @@ export interface MetricsResponse {
   trend_series: TrendSeries;
   trend_granularity: "week" | "month";
   benchmarks: Benchmarks;
+  /** Per-account snapshot at the anchor week. The drilldown modal uses
+   *  this to expand SUM-based KPIs (Cash, AR, Net Liquidity, ratios)
+   *  into the individual ledger accounts that fed the displayed value. */
+  account_breakdown: AccountSnapshot[];
+  /** week_ending of the anchor week — useful for the modal header so
+   *  the user can confirm WHICH week the breakdown reflects. */
+  account_breakdown_week: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -912,6 +932,42 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── Per-account snapshot at anchor week ────────────────────────────────
+    // Used by the dashboard drilldown modal to break SUM-based KPIs (Cash,
+    // AR, AP, Net Liquidity, ratios) down into the individual gl_accounts
+    // that feed them. Restricted to the anchor week to keep the payload
+    // small — the modal only ever shows the latest snapshot.
+    const account_breakdown_week = anchor?.week_ending ?? null;
+    let account_breakdown: AccountSnapshot[] = [];
+    if (account_breakdown_week) {
+      const acctRows = await sql`
+        SELECT
+          ga.account_no,
+          ga.division,
+          ga.description,
+          ga.category_id,
+          ga.normal_balance,
+          wb.end_balance::numeric   AS end_balance,
+          wb.period_debit::numeric  AS period_debit,
+          wb.period_credit::numeric AS period_credit
+        FROM weekly_balances wb
+        JOIN gl_accounts ga ON ga.id = wb.gl_account_id
+        WHERE wb.week_ending = ${account_breakdown_week}::date
+          AND ga.is_active = true
+        ORDER BY ga.account_no ASC, ga.division ASC
+      `;
+      account_breakdown = acctRows.map((r) => ({
+        account_no: Number(r.account_no),
+        division: r.division == null ? null : String(r.division),
+        description: String(r.description),
+        category_id: r.category_id == null ? null : Number(r.category_id),
+        normal_balance: String(r.normal_balance) as "debit" | "credit",
+        end_balance: n(r.end_balance),
+        period_debit: n(r.period_debit),
+        period_credit: n(r.period_credit),
+      }));
+    }
+
     return NextResponse.json({
       weeks,
       months,
@@ -923,6 +979,8 @@ export async function GET(req: NextRequest) {
       trend_series,
       trend_granularity,
       benchmarks: BENCHMARKS,
+      account_breakdown,
+      account_breakdown_week,
     } satisfies MetricsResponse);
   } catch (err) {
     console.error("GET /api/metrics error:", err);
