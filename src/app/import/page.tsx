@@ -40,9 +40,13 @@ interface ImportPreview {
 
 interface ConfirmResult {
   success: boolean;
+  rowsReceived?: number;
   rowsImported: number;
   rowsSkipped: number;
+  rowsDuplicate?: number;
+  rowsOutOfScope?: number;
   weeksCommitted: string[];
+  perWeekTotals?: Array<{ week_ending: string; n: number }>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -305,21 +309,51 @@ function PreviewView({
 // ─── Success state ────────────────────────────────────────────────────────────
 
 function SuccessView({ result }: { result: ConfirmResult }) {
+  const dupCount = result.rowsDuplicate ?? 0;
+  const oosCount = result.rowsOutOfScope ?? 0;
   return (
-    <div className="card px-6 py-12 text-center flex flex-col items-center gap-4">
+    <div className="card px-6 py-10 flex flex-col items-center gap-4">
       <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
         <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
         </svg>
       </div>
-      <div>
+      <div className="text-center">
         <p className="text-base font-semibold text-gray-900">Import complete</p>
         <p className="text-sm text-gray-500 mt-1">
-          {result.rowsImported.toLocaleString()} rows saved across{" "}
-          {result.weeksCommitted.length} week{result.weeksCommitted.length !== 1 ? "s" : ""}.
-          {result.rowsSkipped > 0 && ` ${result.rowsSkipped.toLocaleString()} duplicate rows skipped.`}
+          received {(result.rowsReceived ?? result.rowsImported).toLocaleString()},
+          inserted {result.rowsImported.toLocaleString()},
+          deduped {dupCount.toLocaleString()},
+          excluded {oosCount.toLocaleString()}{" "}
+          (across {result.weeksCommitted.length} week
+          {result.weeksCommitted.length !== 1 ? "s" : ""})
         </p>
       </div>
+      {result.perWeekTotals && result.perWeekTotals.length > 0 && (
+        <div className="w-full max-w-md">
+          <p className="text-xs text-gray-500 mb-1.5 font-medium">
+            Per-week total in weekly_transactions after this import:
+          </p>
+          <table className="w-full text-xs border border-gray-200 rounded">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-1.5 text-left font-medium text-gray-600">Week ending</th>
+                <th className="px-3 py-1.5 text-right font-medium text-gray-600">Rows</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {result.perWeekTotals.map((r) => (
+                <tr key={r.week_ending}>
+                  <td className="px-3 py-1.5 text-gray-700">{r.week_ending}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-gray-900">
+                    {r.n.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <Link href="/weeks" className="btn-primary mt-2">
         View Weeks
       </Link>

@@ -1,14 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import type {
   WeekMetric,
   PnlSummary,
   TrendSeries,
+  TrendPoint,
   Benchmarks,
 } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 import InfoTooltip from "@/components/ui/InfoTooltip";
-import Sparkline, { type SparklineFormat, type SparklinePoint } from "@/components/dashboard/Sparkline";
+import Sparkline, { type SparklineFormat } from "@/components/dashboard/Sparkline";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -75,6 +77,7 @@ export function KPICard({
   badge,
   extraLine,
   sparkline,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -95,6 +98,9 @@ export function KPICard({
   extraLine?: string | null;
   /** Optional Sparkline slot rendered to the right of the value. */
   sparkline?: React.ReactNode;
+  /** When provided, the whole card becomes clickable and opens the parent's
+   *  drilldown handler. */
+  onClick?: () => void;
 }) {
   let deltaColor = "text-gray-400";
   let ArrowIcon: React.ReactNode = null;
@@ -128,9 +134,26 @@ export function KPICard({
     : "flex items-center";
   const cardMinWidth = sparkline ? "min-w-[240px]" : "";
 
+  const clickableCls = onClick
+    ? "cursor-pointer hover:shadow-md hover:border-gray-300 transition-shadow"
+    : "";
+
   return (
     <div
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      className={`bg-white rounded-lg border border-gray-200 shadow-sm p-4 flex flex-col gap-1 ${cardMinWidth} ${clickableCls}`}
       style={{ borderLeft: `4px solid ${accent}` }}
     >
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider truncate flex items-center gap-1">
@@ -231,6 +254,11 @@ export default function KPICards({
   /** Industry benchmark reference values for ratio / weeks metrics. */
   benchmarks?: Benchmarks | null;
 }) {
+  // Selected drilldown — null when closed. Each KPICard's onClick sets this
+  // to a {key, format, title, color} descriptor; the modal renders the
+  // matching trendSeries entry as a value-per-week table.
+  const [drill, setDrill] = useState<DrillSpec | null>(null);
+
   if (weeks.length === 0) return <KPISkeleton />;
 
   // Anchor on the last week WITH ACTIVITY — zero-activity future weeks are
@@ -273,6 +301,21 @@ export default function KPICards({
     includeLoc && (locUndrawn ?? 0) > 0
       ? `+ ${fmtMoneyShort(locUndrawn)} undrawn LOC`
       : null;
+
+  // ─── Drilldown helpers ───────────────────────────────────────────────────
+  // Each clickable card calls openDrill(key, ...) which captures the
+  // TrendSeries key + display config and pops the modal.
+  function openDrill(
+    key: keyof TrendSeries,
+    title: string,
+    format: SparklineFormat,
+    color: string,
+  ): (() => void) | undefined {
+    if (!trendSeries) return undefined;
+    const data = trendSeries[key];
+    if (!data || data.length === 0) return undefined;
+    return () => setDrill({ key, title, format, color });
+  }
 
   // ─── Sparkline helpers ──────────────────────────────────────────────────
   // `spark(...)` builds a Sparkline node for a given TrendSeries key with
@@ -352,6 +395,7 @@ export default function KPICards({
           accent={COLORS.cash}
           extraLine={undrawnExtra}
           sparkline={spark("cash", { format: "money", color: COLORS.cash, reference: "avg" })}
+          onClick={openDrill("cash", "Cash on Hand", "money", COLORS.cash)}
         />
         <KPICard
           label="Net Liquidity"
@@ -361,6 +405,7 @@ export default function KPICards({
           accent={COLORS.netLiq}
           badge={locBadge}
           sparkline={spark("net_liquidity", { format: "money", color: COLORS.netLiq, reference: "avg" })}
+          onClick={openDrill("net_liquidity", "Net Liquidity", "money", COLORS.netLiq)}
         />
         <KPICard
           label="Cash Coverage"
@@ -369,6 +414,7 @@ export default function KPICards({
           accent={COLORS.runway}
           badge={locBadge}
           sparkline={spark("cash_coverage_weeks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "cash_coverage_weeks" })}
+          onClick={openDrill("cash_coverage_weeks", "Cash Coverage", "weeks", COLORS.runway)}
         />
       </SectionRow>
 
@@ -380,6 +426,7 @@ export default function KPICards({
           subtitle="Total AR"
           accent={COLORS.ar}
           sparkline={spark("ar", { format: "money", color: COLORS.ar, reference: "avg" })}
+          onClick={openDrill("ar", "What We're Owed", "money", COLORS.ar)}
         />
         <KPICard
           label="AP"
@@ -388,6 +435,7 @@ export default function KPICards({
           accent={COLORS.debt}
           inverseDelta={true}
           sparkline={spark("ap", { format: "money", color: COLORS.debt, reference: "avg" })}
+          onClick={openDrill("ap", "AP", "money", COLORS.debt)}
         />
         <KPICard
           label="Payroll Runway"
@@ -396,6 +444,7 @@ export default function KPICards({
           accent={COLORS.runway}
           badge={locBadge}
           sparkline={spark("payroll_runway_wks", { format: "weeks", color: COLORS.runway, reference: "benchmark", benchmarkKey: "payroll_runway_wks" })}
+          onClick={openDrill("payroll_runway_wks", "Payroll Runway", "weeks", COLORS.runway)}
         />
       </SectionRow>
 
@@ -407,6 +456,7 @@ export default function KPICards({
           accent={COLORS.ratio}
           badge={locBadge}
           sparkline={spark("current_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "current_ratio" })}
+          onClick={openDrill("current_ratio", "Current Ratio", "ratio", COLORS.ratio)}
         />
         <KPICard
           label="Quick Ratio"
@@ -415,6 +465,7 @@ export default function KPICards({
           accent={COLORS.ratio}
           badge={locBadge}
           sparkline={spark("quick_ratio", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "quick_ratio" })}
+          onClick={openDrill("quick_ratio", "Quick Ratio", "ratio", COLORS.ratio)}
         />
         <KPICard
           label="AR to AP"
@@ -422,6 +473,7 @@ export default function KPICards({
           subtitle="AR ÷ AP"
           accent={COLORS.ratio}
           sparkline={spark("ar_to_ap", { format: "ratio", color: COLORS.ratio, reference: "benchmark", benchmarkKey: "ar_to_ap" })}
+          onClick={openDrill("ar_to_ap", "AR to AP", "ratio", COLORS.ratio)}
         />
       </SectionRow>
 
@@ -432,6 +484,7 @@ export default function KPICards({
           subtitle="Period activity in view"
           accent={COLORS.revenue}
           sparkline={spark("revenue", { format: "money", color: COLORS.revenue, reference: "avg" })}
+          onClick={openDrill("revenue", "Revenue", "money", COLORS.revenue)}
         />
         <KPICard
           label="Gross Margin %"
@@ -439,6 +492,7 @@ export default function KPICards({
           subtitle="(Revenue − DJC) ÷ Revenue"
           accent={COLORS.margin}
           sparkline={spark("gross_margin_pct", { format: "pct", color: COLORS.margin, reference: "avg" })}
+          onClick={openDrill("gross_margin_pct", "Gross Margin %", "pct", COLORS.margin)}
         />
         <KPICard
           label="Operating Margin %"
@@ -447,8 +501,109 @@ export default function KPICards({
           accent={COLORS.opMargin}
           help="Accrual basis includes non-cash expenses like depreciation. See P&L Breakdown for cash-only view."
           sparkline={spark("operating_margin_pct", { format: "pct", color: COLORS.opMargin, reference: "avg" })}
+          onClick={openDrill("operating_margin_pct", "Operating Margin %", "pct", COLORS.opMargin)}
         />
       </SectionRow>
+
+      {drill && trendSeries && (
+        <DrilldownModal
+          spec={drill}
+          points={trendSeries[drill.key] ?? []}
+          onClose={() => setDrill(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Drilldown ───────────────────────────────────────────────────────────────
+
+interface DrillSpec {
+  key: keyof TrendSeries;
+  title: string;
+  format: SparklineFormat;
+  color: string;
+}
+
+function fmtByFormat(format: SparklineFormat, n: number | null | undefined): string {
+  if (n === null || n === undefined || !isFinite(n)) return "—";
+  if (format === "money") return fmtMoney(n);
+  if (format === "pct")   return fmtPct(n);
+  if (format === "weeks") return fmtWeeks(n);
+  return n.toFixed(2);
+}
+
+function DrilldownModal({
+  spec,
+  points,
+  onClose,
+}: {
+  spec: DrillSpec;
+  points: TrendPoint[];
+  onClose: () => void;
+}) {
+  // Most recent first — operators look at the latest week.
+  const rows = [...points].reverse();
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="flex items-center justify-between px-6 py-4 border-b border-gray-200"
+          style={{ borderLeft: `4px solid ${spec.color}` }}
+        >
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">{spec.title}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {points.length} weeks · most recent first
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 hover:bg-gray-100 text-gray-500"
+            aria-label="Close"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </div>
+        <div className="overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-500 sticky top-0">
+              <tr>
+                <th className="px-6 py-2 text-left font-medium">Week</th>
+                <th className="px-6 py-2 text-right font-medium">Value</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="px-6 py-6 text-center text-xs text-gray-400">
+                    No data.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((p) => (
+                  <tr key={p.period_label}>
+                    <td className="px-6 py-2 text-gray-700">{p.period_label}</td>
+                    <td className="px-6 py-2 text-right tabular-nums text-gray-900">
+                      {fmtByFormat(spec.format, p.value)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

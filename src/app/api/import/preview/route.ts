@@ -50,6 +50,20 @@ export async function POST(req: NextRequest) {
     // ── Build preview (reads DB for GL lookup + dedupe hashes) ────────────────
     const preview = await buildImportPreview(filename, rows, sql);
 
+    // Per-week summary log so multi-chunk same-week uploads are auditable
+    // even before the user clicks Confirm.
+    const previewNew = preview.weeksAffected.reduce((s, w) => s + w.rowsNew, 0);
+    const previewDup = preview.weeksAffected.reduce((s, w) => s + w.rowsDuplicate, 0);
+    console.log(
+      `[preview] file ${filename}: received ${rows.length}, new ${previewNew}, deduped ${previewDup}, excluded ${preview.outOfScope.rowCount}`
+    );
+    for (const w of preview.weeksAffected) {
+      const wkISO = w.weekEnding.toISOString().slice(0, 10);
+      console.log(
+        `[preview] week ${wkISO}: ${w.rowsNew} new, ${w.rowsDuplicate} dedupe-skipped`
+      );
+    }
+
     // ── Persist rows to staging table ─────────────────────────────────────────
     const sessionId = randomUUID();
     // Dates must be serialized to ISO strings so JSONB round-trips cleanly
