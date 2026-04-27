@@ -7,10 +7,13 @@ import type {
   TrendSeries,
   TrendPoint,
   Benchmarks,
+  AccountSnapshot,
 } from "@/app/api/metrics/route";
 import { lastActiveWeeks } from "@/lib/active-weeks";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 import Sparkline, { type SparklineFormat } from "@/components/dashboard/Sparkline";
+import { getKpiBreakdown, type KpiBreakdown } from "@/lib/kpi-breakdown";
+import KpiBreakdownSections from "@/components/dashboard/KpiBreakdownSections";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -234,6 +237,7 @@ export default function KPICards({
   locUndrawn,
   trendSeries,
   benchmarks,
+  accountBreakdown,
 }: {
   weeks: WeekMetric[];
   /** Window-level P&L totals; when provided, the P&L row shows
@@ -253,6 +257,9 @@ export default function KPICards({
   trendSeries?: TrendSeries | null;
   /** Industry benchmark reference values for ratio / weeks metrics. */
   benchmarks?: Benchmarks | null;
+  /** Per-account snapshot at the anchor week — feeds the drilldown
+   *  modal's Formula / Inputs / Computation sections. */
+  accountBreakdown?: AccountSnapshot[];
 }) {
   // Selected drilldown — null when closed. Each KPICard's onClick sets this
   // to a {key, format, title, color} descriptor; the modal renders the
@@ -509,6 +516,7 @@ export default function KPICards({
         <DrilldownModal
           spec={drill}
           points={trendSeries[drill.key] ?? []}
+          breakdown={getKpiBreakdown(drill.key, latest, accountBreakdown ?? [])}
           onClose={() => setDrill(null)}
         />
       )}
@@ -536,14 +544,29 @@ function fmtByFormat(format: SparklineFormat, n: number | null | undefined): str
 function DrilldownModal({
   spec,
   points,
+  breakdown,
   onClose,
 }: {
   spec: DrillSpec;
   points: TrendPoint[];
+  breakdown: KpiBreakdown | null;
   onClose: () => void;
 }) {
   // Most recent first — operators look at the latest week.
   const rows = [...points].reverse();
+
+  // Header value pulls from the breakdown when available so the modal
+  // shows EXACTLY the number that fed the formula. Otherwise fall back
+  // to the latest sparkline point so non-breakdown metrics still get a
+  // headline value.
+  const headerValue =
+    breakdown !== null
+      ? breakdown.resultFormat === "ratio"
+        ? breakdown.result.toFixed(3)
+        : fmtByFormat("money", breakdown.result)
+      : points.length > 0
+        ? fmtByFormat(spec.format, points[points.length - 1].value)
+        : "—";
 
   return (
     <div
@@ -551,7 +574,7 @@ function DrilldownModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div
@@ -560,8 +583,8 @@ function DrilldownModal({
         >
           <div>
             <h3 className="text-sm font-semibold text-gray-900">{spec.title}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {points.length} weeks · most recent first
+            <p className="text-xl font-bold text-gray-900 tabular-nums leading-tight mt-0.5">
+              {headerValue}
             </p>
           </div>
           <button
@@ -576,6 +599,10 @@ function DrilldownModal({
           </button>
         </div>
         <div className="overflow-auto">
+          {breakdown && <KpiBreakdownSections breakdown={breakdown} />}
+          <div className="px-6 pt-3 pb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+            Per-week trend · {points.length} weeks
+          </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500 sticky top-0">
               <tr>

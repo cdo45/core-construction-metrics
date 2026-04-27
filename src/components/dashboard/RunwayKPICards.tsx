@@ -6,9 +6,13 @@ import type {
   TrendSeries,
   TrendPoint,
   Benchmarks,
+  WeekMetric,
+  AccountSnapshot,
 } from "@/app/api/metrics/route";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 import Sparkline, { type SparklineFormat } from "@/components/dashboard/Sparkline";
+import { getKpiBreakdown, type KpiBreakdown } from "@/lib/kpi-breakdown";
+import KpiBreakdownSections from "@/components/dashboard/KpiBreakdownSections";
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -132,6 +136,8 @@ export default function RunwayKPICards({
   locUndrawn,
   trendSeries,
   benchmarks,
+  weeks,
+  accountBreakdown,
 }: {
   runway: RunwaySummary | null;
   /** When true, Weeks of Runway uses (cash + undrawn LOC) / burn. Owned
@@ -142,6 +148,12 @@ export default function RunwayKPICards({
    *  populated alongside the other metrics in /api/metrics. */
   trendSeries?: TrendSeries | null;
   benchmarks?: Benchmarks | null;
+  /** Latest WeekMetric snapshot — feeds the drilldown breakdown helper.
+   *  Only used when getKpiBreakdown can produce a result for the active
+   *  metric; runway-specific keys (weeks_of_runway, weekly_collections,
+   *  etc.) fall back to the trend-only modal. */
+  weeks?: WeekMetric[];
+  accountBreakdown?: AccountSnapshot[];
 }) {
   // Drilldown selection lives at the parent so the modal can render below
   // the grid. Hooks must run unconditionally — declared before the early
@@ -283,13 +295,20 @@ export default function RunwayKPICards({
         onClick={openDrill("grow_weekly", "Grow Number", "money", COLORS.grow)}
       />
 
-      {drill && trendSeries && (
-        <RunwayDrilldownModal
-          spec={drill}
-          points={trendSeries[drill.key] ?? []}
-          onClose={() => setDrill(null)}
-        />
-      )}
+      {drill && trendSeries && (() => {
+        const latest = weeks && weeks.length > 0 ? weeks[weeks.length - 1] : null;
+        const breakdown = latest
+          ? getKpiBreakdown(drill.key, latest, accountBreakdown ?? [])
+          : null;
+        return (
+          <RunwayDrilldownModal
+            spec={drill}
+            points={trendSeries[drill.key] ?? []}
+            breakdown={breakdown}
+            onClose={() => setDrill(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -314,20 +333,30 @@ function fmtDrillValue(format: SparklineFormat, n: number | null | undefined): s
 function RunwayDrilldownModal({
   spec,
   points,
+  breakdown,
   onClose,
 }: {
   spec: RunwayDrillSpec;
   points: TrendPoint[];
+  breakdown: KpiBreakdown | null;
   onClose: () => void;
 }) {
   const rows = [...points].reverse();
+  const headerValue =
+    breakdown !== null
+      ? breakdown.resultFormat === "ratio"
+        ? breakdown.result.toFixed(3)
+        : fmtMoneyShort(breakdown.result)
+      : points.length > 0
+        ? fmtDrillValue(spec.format, points[points.length - 1].value)
+        : "—";
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 col-span-full"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        className="bg-white rounded-xl shadow-xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div
@@ -336,8 +365,8 @@ function RunwayDrilldownModal({
         >
           <div>
             <h3 className="text-sm font-semibold text-gray-900">{spec.title}</h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {points.length} weeks · most recent first
+            <p className="text-xl font-bold text-gray-900 tabular-nums leading-tight mt-0.5">
+              {headerValue}
             </p>
           </div>
           <button
@@ -352,6 +381,10 @@ function RunwayDrilldownModal({
           </button>
         </div>
         <div className="overflow-auto">
+          {breakdown && <KpiBreakdownSections breakdown={breakdown} />}
+          <div className="px-6 pt-3 pb-1 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+            Per-week trend · {points.length} weeks
+          </div>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs text-gray-500 sticky top-0">
               <tr>
